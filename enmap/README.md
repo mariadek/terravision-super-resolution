@@ -2,20 +2,18 @@
 
 This directory contains the **EnMAP hyperspectral pansharpening workflow** developed within the **TERRAVISION Horizon Europe project**. The workflow enhances the spatial resolution of EnMAP hyperspectral imagery from **30 m to 10 m** by exploiting high-spatial-resolution **Sentinel-2 multispectral imagery**.
 
-The objective is to improve the spatial detail of EnMAP hyperspectral observations while preserving their spectral information, providing enhanced products suitable for downstream Earth Observation and mining-related applications.
-
 ## Methodology
 
-The workflow combines the spectral information contained in the **EnMAP hyperspectral data** with the higher-resolution spatial information provided by **Sentinel-2 10 m multispectral bands** using **Machine Learning (ML) / Deep Learning (DL)-based pansharpening**.
+The workflow combines the spectral information contained in the **EnMAP hyperspectral data** with the higher-resolution spatial information provided by **Sentinel-2 10 m multispectral bands** using the **Gram-Schmidt Pan Sharpening** method.
 
 ```text
-ENMAP
+                    ENMAP
                       │
                       ▼
                 Find/download
                       │
                       │
-SENTINEL-2 ────────► Find/download
+SENTINEL-2 ───► Find/download
                       │
                       ▼
                 Preprocessing
@@ -29,7 +27,7 @@ SENTINEL-2 ────────► Find/download
                Co-registration
                       │
                       ▼
-                 Pansharpening
+              GSA Pansharpening
                       │
                       ▼
                  GeoTIFF/COG
@@ -43,15 +41,13 @@ SENTINEL-2 ────────► Find/download
                  STAC Catalog
 ```
 
-The methodology aims to increase the spatial resolution of EnMAP observations from **30 m to 10 m** while minimising spectral distortion in the reconstructed hyperspectral product.
-
 ## Data
 
 The workflow uses:
 
-* **EnMAP hyperspectral VNIR/SWIR observations** at 30 m spatial resolution.
-* **Sentinel-2 multispectral imagery** at 10 m spatial resolution.
-* Associated metadata required for preprocessing, co-registration, and spatial alignment of the EnMAP and Sentinel-2 observations.
+* **EnMAP Level-2A (L2A) hyperspectral VNIR/SWIR** products at 30 m spatial resolution, retrieved from the DLR STAC catalogue.
+* **Sentinel-2 Level-2A (L2A)** multispectral imagery at 10 m spatial resolution, used to provide the high-resolution spatial information for pansharpening.
+* **Sentinel-2 multispectral imagery** at 10 m spatial resolution, retrieved from the Copernicus Data Space Ecosystem (CDSE) STAC catalogue and used to provide the high-resolution spatial information for pansharpening.
 
 ## Installation
 
