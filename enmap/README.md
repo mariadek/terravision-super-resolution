@@ -46,8 +46,7 @@ SENTINEL-2 ───► Find/download
 The workflow uses:
 
 * **EnMAP Level-2A (L2A) hyperspectral VNIR/SWIR** products at 30 m spatial resolution, retrieved from the DLR STAC catalogue.
-* **Sentinel-2 Level-2A (L2A)** multispectral imagery at 10 m spatial resolution, used to provide the high-resolution spatial information for pansharpening.
-* **Sentinel-2 multispectral imagery** at 10 m spatial resolution, retrieved from the Copernicus Data Space Ecosystem (CDSE) STAC catalogue and used to provide the high-resolution spatial information for pansharpening.
+* **Sentinel-2  Level-2A (L2A)** multispectral imagery at 10 m spatial resolution, retrieved from the Copernicus Data Space Ecosystem (CDSE) STAC catalogue and used to provide the high-resolution spatial information for pansharpening.
 
 ## Installation
 
