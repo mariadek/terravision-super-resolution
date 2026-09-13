@@ -72,7 +72,20 @@ The primary output is a spatially enhanced **EnMAP hyperspectral product** with 
 
 ## Evaluation
 
-Spatial and spectral quality metrics used to evaluate the pansharpened products are documented here.
+## Evaluation
+
+The quality of the pansharpened EnMAP products can be evaluated using complementary **spectral and spatial quality metrics** to assess both the preservation of hyperspectral information and the improvement in spatial detail.
+
+Example evaluation metrics include:
+
+* **Spectral Angle Mapper (SAM):** measures the spectral similarity between reference and reconstructed hyperspectral pixels. Lower values indicate better spectral preservation.
+* **ERGAS (Erreur Relative Globale Adimensionnelle de Synthèse):** measures the overall relative reconstruction error across spectral bands. Lower values indicate better reconstruction quality.
+* **Peak Signal-to-Noise Ratio (PSNR):** quantifies reconstruction quality based on the difference between reference and reconstructed imagery. Higher values indicate better performance.
+* **Structural Similarity Index (SSIM):** evaluates the preservation of spatial structure, contrast, and local image characteristics. Higher values indicate greater structural similarity.
+* **Correlation Coefficient (CC):** measures the correlation between reference and reconstructed spectral bands. Values closer to 1 indicate stronger agreement.
+* **Root Mean Square Error (RMSE):** measures the magnitude of reconstruction errors between reference and predicted data. Lower values indicate better agreement.
+
+Where high-resolution reference hyperspectral data are not available, evaluation can also be performed using **reduced-resolution experiments**, in which the original EnMAP data are spatially degraded and subsequently reconstructed to enable comparison against a known reference.
 
 ## License
 
