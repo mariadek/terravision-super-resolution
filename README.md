@@ -34,12 +34,12 @@ ML-based thermal sharpening of **Sentinel-3 Land Surface Temperature (LST)** pro
 
 ## Repository Scope
 
-| Satellite / Sensor   | Data                     | Spatial Enhancement               |
-| -------------------- | ------------------------ | --------------------------------- |
-| **Sentinel-2 / MSI** | Multispectral            | Super-resolution to ≥10 m         |
-| **PRISMA**           | Hyperspectral + PAN      | Pansharpening from 30 m to 5 m    |
-| **EnMAP**            | Hyperspectral            | Hyperspectral spatial enhancement |
-| **Sentinel-3**       | Land Surface Temperature | ML-based thermal sharpening       |
+| Satellite / Sensor   | Data                                    | Spatial Enhancement                           |
+| -------------------- | ----------------------------------------| ----------------------------------------------|
+| **Sentinel-2 / MSI** | Multispectral                           | Super-resolution to 10 m                      |
+| **PRISMA**           | Hyperspectral + PAN                     | Pansharpening from 30 m to 5 m                |
+| **EnMAP**            | Hyperspectral + PseudoPAN (Sentinel-2)  | Pansharpening from 30 m to 10 m               |
+| **Sentinel-3**       | Land Surface Temperature                | ML-based thermal sharpening from 1 km to 10 m |
 
 The workflows are designed to be modular and extensible, allowing additional algorithms, datasets, trained models, and evaluation procedures to be incorporated as the project progresses.
 
@@ -62,13 +62,9 @@ The main objectives of this repository are to:
 ```text
 terravision-super-resolution/
 ├── sentinel2/
-├── hyperspectral/
-│   ├── prisma/
-│   └── enmap/
+├── prisma/
+├── enmap/
 ├── sentinel3/
-├── configs/
-├── examples/
-├── figures/
 ├── LICENSE
 └── README.md
 ```
