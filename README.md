@@ -64,7 +64,7 @@ terravision-super-resolution/
 ├── sentinel2/
 ├── prisma/
 ├── enmap/
-├── sentinel3/
+├── sentinel3lst/
 ├── LICENSE
 └── README.md
 ```
