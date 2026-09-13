@@ -16,19 +16,19 @@ The repository currently includes the following spatial enhancement workflows:
 
 ### Sentinel-2 Multispectral Super-Resolution
 
-Super-resolution of **Sentinel-2 MSI** imagery to enhance lower-resolution spectral bands to a **common spatial resolution of at least 10 m**, while preserving their spectral characteristics.
+Super-resolution of **Sentinel-2 MSI** imagery to enhance lower-resolution spectral bands to a **common spatial resolution of at least 10 m**.
 
 ### PRISMA Hyperspectral Pansharpening
 
-Enhancement of **PRISMA hyperspectral imagery from 30 m to 5 m** by fusing hyperspectral observations with the simultaneously acquired high-resolution **panchromatic (PAN) band**, while preserving spectral information.
+Enhancement of **PRISMA hyperspectral imagery from 30 m to 5 m** by fusing hyperspectral observations with the simultaneously acquired high-resolution **panchromatic (PAN) band**.
 
-### EnMAP Hyperspectral Spatial Enhancement
+### EnMAP Hyperspectral Pansharpening
 
-ML/DL-based spatial enhancement of **EnMAP hyperspectral imagery**, aiming to increase spatial detail while maintaining the spectral fidelity required for hyperspectral analysis.
+Enhancement of EnMAP hyperspectral imagery from 30 m to 10 m by fusing the hyperspectral observations with 10 m Sentinel-2 multispectral bands, which provide the high-resolution spatial information for pansharpening.
 
 ### Sentinel-3 LST Thermal Sharpening
 
-ML-based thermal sharpening of **Sentinel-3 Land Surface Temperature (LST)** products by combining coarse-resolution thermal observations with higher-resolution multispectral information.
+ML-based thermal sharpening of Sentinel-3 Land Surface Temperature (LST) products from approximately 1 km to 10 m by combining the coarse-resolution thermal observations with super-resolved Sentinel-2 multispectral imagery.
 
 ---
 
