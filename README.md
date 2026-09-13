@@ -1,7 +1,7 @@
 # TERRAVISION Super-Resolution Workflows
 
 <p align="left">
-  <img src="TERRAVISION MAIN LOGO 2Colours_1 positive.png" alt="TERRAVISION Logo" height="50">
+  <img src="figures/TERRAVISION MAIN LOGO 2Colours_1 positive.png" alt="TERRAVISION Logo" height="50">
 </p>
 
 This repository contains **Machine Learning (ML) and Deep Learning (DL) super-resolution and spatial enhancement workflows** developed within the **TERRAVISION Horizon Europe project**. TERRAVISION aims to improve the sustainability, efficiency, and environmental performance of the mining industry through advanced **Earth Observation (EO)** technologies, integrating satellite, airborne, and ground-based observations across the mining value chain.
