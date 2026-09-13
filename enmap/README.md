@@ -72,8 +72,6 @@ The primary output is a spatially enhanced **EnMAP hyperspectral product** with 
 
 ## Evaluation
 
-## Evaluation
-
 The quality of the pansharpened EnMAP products can be evaluated using complementary **spectral and spatial quality metrics** to assess both the preservation of hyperspectral information and the improvement in spatial detail.
 
 Example evaluation metrics include:
