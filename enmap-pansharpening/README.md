@@ -84,7 +84,7 @@ Clone via:
 ```
 ### Docker
 ```bash
-      AOI_FILE=examples/La_Zarza_aoi.json docker compose run --rm enmap_pansharp
+      USER_INPUT=examples/La_Zarza_aoi.json docker compose run --rm enmap_pansharp
 ```
 ## Outputs
 

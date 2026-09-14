@@ -19,4 +19,4 @@ services:
 
     entrypoint: ["python", "src/main.py"]
 
-    command: ["--user_input", "${AOI_FILE:-aoi.geojson}"]
+    command: ["--user_input", "${USER_INPUT:-aoi.geojson}"]
