@@ -1,0 +1,8 @@
+cartopy
+geopandas
+numpy
+scipy
+shapely
+pyproj
+rasterio
+scikit-image

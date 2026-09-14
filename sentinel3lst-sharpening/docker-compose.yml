@@ -1,0 +1,22 @@
+services:
+  thermalsharpening:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    env_file:
+      - .env.example
+
+    image: thermalsharperning:latest
+    container_name: thermalsharpening
+
+    volumes:
+      - .:/app
+      - ./data:/data
+
+    environment:
+      PYTHONUNBUFFERED: "1"
+
+    entrypoint: ["python", "src/main.py"]
+
+    command: ["--user_input", "${USER_INPUT:-aoi.geojson}"] # user input json that includes aoi and date and parse aoi and date afterwards

@@ -1,0 +1,29 @@
+project:
+  name: sentinel3-lst-sharpening
+
+input:
+  directory: "/data/sentinel3slstr"
+  
+  sentinel3:
+    min_overlap: 100
+  
+  sentinel2:
+    max_cloud_cover: 10
+    max_time_difference_hours: 1
+    
+  sentinel2sr:
+    max_cloud_cover: 10
+    max_time_difference_hours: 1
+  
+output:
+  directory: "data/pansharpening_output"
+  format: "COG"
+
+storage:
+  s3:
+    enabled: false
+    bucket: null
+    prefix: "sentinel3-slstr-ntc-thermal-sharpened"
+
+stac:
+  collection_id: "sentinel3-slstr-ntc-thermal-sharpened"
