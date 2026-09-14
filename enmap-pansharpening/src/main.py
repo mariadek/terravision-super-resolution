@@ -159,7 +159,7 @@ def load_user_input(
     return aoi, acquisition_datetime
 
 
-def main(user_input_path: str) -> None:
+def main(user_input_path: str, config_path: str) -> None:
     """Run the TERRAVISION EnMAP pansharpening pipeline."""
 
     logger.info(
@@ -192,7 +192,7 @@ def main(user_input_path: str) -> None:
             "No acquisition datetime provided"
         )
 
-    config = load_config("configs/example.yaml")
+    config = load_config(config_path)
 
     pipeline = PipelineConfig(config)
 
@@ -223,10 +223,22 @@ if __name__ == "__main__":
         ),
     )
 
+    parser.add_argument(
+        "--config",
+        default="configs/config.yaml",
+        help=(
+            "Path to the pipeline configuration file "
+            "(default: config/config.yaml)."
+        ),
+    )
+
     args = parser.parse_args()
 
     try:
-        main(args.user_input)
+        main(
+            user_input_path=args.user_input,
+            config_path=args.config,
+            )
 
     except (FileNotFoundError, ValueError) as exc:
         logger.error("%s", exc)

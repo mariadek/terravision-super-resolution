@@ -1,0 +1,30 @@
+project:
+  name: enmap-pansharpening
+
+input:
+  directory: "data"
+  enmap_data_root: "data/enmap/ENMAP_HSI_L2A"
+  sen2_data_root: "data/sentinel2/sentinel-2-l2a"
+
+search:
+  min_overlap: 80
+sentinel2_search:
+  max_cloud_cover: 20
+  max_time_difference_hours: 1
+
+sentinel2_download:
+  download_full_sen2_item: False
+
+processing:
+  crop_to_aoi: True
+
+output_directory: "outputs"
+
+storage:
+  s3:
+    enabled: false
+    bucket: null
+    prefix: "enmap-pansharpened-tv"
+
+stac:
+  collection_id: "enmap-pansharpened-tv"

@@ -57,29 +57,31 @@ The workflow uses:
 
 ## Installation
 
-Installation instructions and workflow-specific dependencies are provided in this section.
+Clone via:
+```bash
+      git clone <repo>
+```
 
-### Docker
+1. Create a Python environment (conda):
+```bash
+      conda env create -f environment.yml
+      conda activate pansharpen
+```
 
-AOI_FILE=examples/La_Zarza_aoi.json docker compose run --rm enmap_pansharp
+2. Install dependencies with pip
+```bash
+      pip install -r requirements.txt
+```
+
+## Usage
 
 ### Python 
 
 python src/main.py --user_input ./examples/La_Zarza_aoi.json
 
-## Usage
+### Docker
 
-### Data Preparation
-
-Instructions for preparing, preprocessing, and spatially aligning EnMAP and Sentinel-2 data.
-
-### Training
-
-Instructions for training the super-resolution model.
-
-### Inference
-
-Instructions for applying a trained model to EnMAP imagery.
+AOI_FILE=examples/La_Zarza_aoi.json docker compose run --rm enmap_pansharp
 
 ## Outputs
 

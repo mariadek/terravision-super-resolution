@@ -13,7 +13,6 @@ import numpy as np
 from pyproj import Transformer
 from arosics import COREG_LOCAL
 from skimage.transform import resize
-from tqdm import tqdm
 from dotenv import load_dotenv
 
 from enmap_pansharpening.download.enmap import EnMAPDownloader
@@ -57,37 +56,31 @@ class PipelineConfig:
         # ---------------------------------------------------------
         # Data repository configuration
         # ---------------------------------------------------------
-        self.data_directory = Path("data")
-        self.enmap_data_root = Path("data/enmap/ENMAP_HSI_L2A")
-        self.sen2_data_root =  Path("data/sentinel2/sentinel-2-l2a")
+        self.data_directory = Path(config['input']['directory'])
+        self.enmap_data_root = Path(config['input']['enmap_data_root'])
+        self.sen2_data_root =  Path(config['input']['sen2_data_root'])
 
         # ---------------------------------------------------------
         # Image search configuration
         # ---------------------------------------------------------
-
-        self.max_cloud_cover = 10
-
-        self.max_results = 3
-
-        self.overlap_percentage = 70
-
-        self.max_time_diff = 1 # hours
+        self.overlap_percentage = config['search']['min_overlap']
+        self.max_cloud_cover = config['sentinel2_search']['max_cloud_cover']
+        self.max_time_diff = config['sentinel2_search']['max_time_difference_hours']
 
         # ---------------------------------------------------------
         # CDSE Sentinel-2 Download Configuration
         # ---------------------------------------------------------
-
-        self.download_full_sen2_item = False
+        self.download_full_sen2_item = config['sentinel2_download']['download_full_sen2_item']
 
         # ---------------------------------------------------------
         # Processing configuration
         # ---------------------------------------------------------
-        self.crop_to_aoi = True
+        self.crop_to_aoi = config['processing']['crop_to_aoi']
 
         # ---------------------------------------------------------
         # Output configuration
         # ---------------------------------------------------------
-        self.output_directory = Path("outputs")
+        self.output_directory = Path(config['output_directory'])
 
 
         # Temporary processing files
@@ -251,7 +244,6 @@ class PipelineConfig:
                 )
 
                 # EnMAP download
-
                 enmap_download_path = enmap_downloader.download_item(    
                     enmap_scene.item,
                     download_root=self.enmap_data_root
