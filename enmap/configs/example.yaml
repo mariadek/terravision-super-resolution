@@ -1,0 +1,36 @@
+project:
+  name: enmap-pansharpening
+
+input:
+  directory: "/Users/mariad/data/"
+  enmap:
+    scene_id: null
+    stac:
+      url: "https://geoservice.dlr.de/eoc/ogc/stac/v1/"
+      collection_id: "ENMAP_HSI_L2A"
+
+  sentinel2:
+    max_cloud_cover: 20
+    max_time_difference_hours: 1
+
+processing:
+  target_crs: null
+  
+  coregistration:
+    method: "Arosics"
+
+  pansharpening:
+    method: "GSA"
+
+output:
+  directory: "/Users/mariad/pansharpening_output"
+  format: "COG"
+
+storage:
+  s3:
+    enabled: false
+    bucket: null
+    prefix: "enmap-pansharpened"
+
+stac:
+  collection_id: "enmap-pansharpened"

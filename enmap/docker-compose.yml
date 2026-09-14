@@ -1,0 +1,22 @@
+services:
+  enmap_pansharp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    env_file:
+      - .env.example
+
+    image: enmap_pansharp:latest
+    container_name: enmap_pansharp
+
+    volumes:
+      - .:/app
+      - ./data:/data
+
+    environment:
+      PYTHONUNBUFFERED: "1"
+
+    entrypoint: ["python", "src/main.py"]
+
+    command: ["--aoi", "${AOI_FILE:-aoi.geojson}"]

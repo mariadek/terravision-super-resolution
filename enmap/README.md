@@ -7,6 +7,27 @@ This directory contains the **EnMAP hyperspectral pansharpening workflow** devel
 The workflow combines the spectral information contained in the **EnMAP hyperspectral data** with the higher-resolution spatial information provided by **Sentinel-2 10 m multispectral bands** using the **Gram-Schmidt Pan Sharpening** method.
 
 ```text
+
+EnMAP search
+    ↓
+Sentinel-2 matching
+    ↓
+Download
+    ↓
+EnMAP / Sentinel-2 preprocessing
+    ↓
+Coregistration
+    ↓
+Common-area cropping
+    ↓
+Pansharpening stage 1
+    ↓
+Optional AOI crop
+    ↓
+Pansharpening reconstruction
+    ↓
+Housekeeping
+
                     ENMAP
                       │
                       ▼
@@ -51,6 +72,14 @@ The workflow uses:
 ## Installation
 
 Installation instructions and workflow-specific dependencies are provided in this section.
+
+* Docker
+
+AOI_FILE=examples/La_Zarza_aoi.json docker compose run --rm enmap_pansharp
+
+* Python 
+
+python src/main.py --aoi ./examples/La_Zarza_aoi.json
 
 ## Usage
 
