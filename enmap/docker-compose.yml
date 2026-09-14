@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
 
     env_file:
-      - .env.example
+      - .env
 
     image: enmap_pansharp:latest
     container_name: enmap_pansharp
@@ -19,4 +19,4 @@ services:
 
     entrypoint: ["python", "src/main.py"]
 
-    command: ["--aoi", "${AOI_FILE:-aoi.geojson}"]
+    command: ["--user_input", "${AOI_FILE:-aoi.geojson}"]

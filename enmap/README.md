@@ -8,26 +8,6 @@ The workflow combines the spectral information contained in the **EnMAP hyperspe
 
 ```text
 
-EnMAP search
-    ↓
-Sentinel-2 matching
-    ↓
-Download
-    ↓
-EnMAP / Sentinel-2 preprocessing
-    ↓
-Coregistration
-    ↓
-Common-area cropping
-    ↓
-Pansharpening stage 1
-    ↓
-Optional AOI crop
-    ↓
-Pansharpening reconstruction
-    ↓
-Housekeeping
-
                     ENMAP
                       │
                       ▼
@@ -47,8 +27,14 @@ SENTINEL-2 ───► Find/download
                       ▼
                Co-registration
                       │
+                      ▼  
+            Common-area cropping
                       ▼
-              GSA Pansharpening
+            Pansharpening stage 1
+                      ▼
+               Optional AOI crop
+                      ▼
+         Pansharpening reconstruction
                       │
                       ▼
                  GeoTIFF/COG
@@ -73,13 +59,13 @@ The workflow uses:
 
 Installation instructions and workflow-specific dependencies are provided in this section.
 
-* Docker
+### Docker
 
 AOI_FILE=examples/La_Zarza_aoi.json docker compose run --rm enmap_pansharp
 
-* Python 
+### Python 
 
-python src/main.py --aoi ./examples/La_Zarza_aoi.json
+python src/main.py --user_input ./examples/La_Zarza_aoi.json
 
 ## Usage
 
