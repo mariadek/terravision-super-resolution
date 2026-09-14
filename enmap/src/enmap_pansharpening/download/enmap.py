@@ -1,113 +1,141 @@
+import logging
 import os
-import urllib3
 import shutil
+from pathlib import Path
 from urllib.parse import urlparse
 
-from pathlib import Path
+import urllib3
 from pystac_client import Client
 
-from dotenv import load_dotenv
-
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-load_dotenv(PROJECT_ROOT / ".env")
+logger = logging.getLogger(__name__)
 
 DLR_STAC_URL = "https://geoservice.dlr.de/eoc/ogc/stac/v1/"
 ENMAP_COLLECTION = "ENMAP_HSI_L2A"
 
+ALLOWED_ASSETS = {"metadata", "image"}
+
+
 class EnMAPDownloader:
-
-    """ 
-    Search and download EnMAP scenes. 
-
-    This class intentionally separates: 
-    1. Search parameters 
-    2. Remote API/search results 
-    3. Downloading scene data 
-    """
+    """Search and download EnMAP scenes from the DLR STAC catalog."""
 
     def __init__(self):
         self.username = os.environ["ENMAP_USERNAME"]
         self.password = os.environ["ENMAP_PASSWORD"]
 
-    def search(self, aoi_geojson,  datetime=None):
+        self.http = urllib3.PoolManager()
+        self.headers = urllib3.make_headers(
+            basic_auth=f"{self.username}:{self.password}"
+        )
+
+    def search(self, aoi_geojson, datetime=None):
+        """
+        Search for EnMAP L2A products intersecting an AOI.
+
+        Parameters
+        ----------
+        aoi_geojson : dict
+            GeoJSON geometry used for the spatial search.
+        datetime : str, optional
+            STAC datetime expression, e.g. "2025-01-01/2025-01-31".
+
+        Returns
+        -------
+        pystac.ItemCollection
+            Matching STAC items.
+        """
+        logger.info("Searching EnMAP L2A products")
 
         catalog = Client.open(DLR_STAC_URL)
 
         search = catalog.search(
-            collections = [ENMAP_COLLECTION],
-            intersects =  aoi_geojson,
-            datetime = datetime,
-            )
+            collections=[ENMAP_COLLECTION],
+            intersects=aoi_geojson,
+            datetime=datetime,
+        )
 
         items = search.item_collection()
 
+        logger.info("Found %d EnMAP scene(s)", len(items))
+
         return items
-
-
 
     def download_item(self, item, download_root):
         """
-        Download all assets of a STAC item.
+        Download the metadata and image assets of a STAC item.
 
         Parameters
         ----------
         item : pystac.Item
             STAC item to download.
-        download_root : str
-            Root directory where the item will be downloaded.
+        download_root : str | Path
+            Root directory for downloaded items.
 
         Returns
         -------
-        str
-            Path to the downloaded item directory.
+        Path
+            Directory containing the downloaded assets.
         """
+        download_path = Path(download_root) / item.id
+        download_path.mkdir(parents=True, exist_ok=True)
 
-        http = urllib3.PoolManager()
-
-        header = urllib3.make_headers(
-            basic_auth=f"{self.username}:{self.password}"
-        )
-
-        download_path = os.path.join(
-            download_root,
+        logger.info(
+            "Downloading EnMAP scene %s to %s",
             item.id,
+            download_path,
         )
 
-        os.makedirs(download_path, exist_ok=True)
+        for asset_name in ALLOWED_ASSETS:
+            asset = item.assets.get(asset_name)
 
-        print(f"Item: {item.id}")
-        print(f"Destination: {download_path}")
-
-        for name, asset in item.assets.items():
-
-            filename = os.path.basename(
-                urlparse(asset.href).path
-            )
-
-            output_path = os.path.join(
-                download_path,
-                filename
-            )
-
-            temp_path = output_path + ".part"
-
-            # Check if already downloaded
-            if os.path.exists(output_path):
-                print(f"  Already downloaded: {filename}")
+            if asset is None:
+                logger.warning(
+                    "Asset %r not available for EnMAP scene %s",
+                    asset_name,
+                    item.id,
+                )
                 continue
 
-            print(f"  Downloading {name}: {filename}")
+            filename = Path(urlparse(asset.href).path).name
+
+            if not filename:
+                logger.warning(
+                    "Invalid URL for EnMAP asset %r: %s",
+                    asset_name,
+                    asset.href,
+                )
+                continue
+
+            output_path = download_path / filename
+            temp_path = output_path.with_name(
+                f"{output_path.name}.part"
+            )
+
+            if output_path.exists():
+                logger.info(
+                    "EnMAP asset already downloaded: %s",
+                    output_path,
+                )
+                continue
+
+            logger.info(
+                "Downloading EnMAP asset %r: %s",
+                asset_name,
+                filename,
+            )
 
             try:
-                with http.request(
+                with self.http.request(
                     "GET",
                     asset.href,
-                    headers=header,
+                    headers=self.headers,
                     preload_content=False,
                 ) as response:
 
                     if response.status == 404:
-                        print(f"File not found: {asset.href}")
+                        logger.warning(
+                            "EnMAP asset not found (HTTP 404): %s",
+                            asset.href,
+                        )
                         continue
 
                     if response.status != 200:
@@ -116,24 +144,34 @@ class EnMAPDownloader:
                             f"{asset.href}"
                         )
 
-                    # Download to temporary file first
-                    with open(temp_path, "wb") as out_file:
-                        shutil.copyfileobj(response, out_file)
+                    with temp_path.open("wb") as out_file:
+                        shutil.copyfileobj(
+                            response,
+                            out_file,
+                        )
 
-                # Only rename after successful download
-                os.replace(temp_path, output_path)
+                # Move into place only after a successful download.
+                temp_path.replace(output_path)
+
+                logger.info(
+                    "EnMAP asset downloaded successfully: %s",
+                    output_path,
+                )
 
             except Exception:
-                # Remove incomplete download
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
+                temp_path.unlink(missing_ok=True)
+
+                logger.exception(
+                    "Failed to download EnMAP asset %r for scene %s",
+                    asset_name,
+                    item.id,
+                )
 
                 raise
-        '''
-        print(
-            f"Finished item {item.id}: "
-            f"{os.listdir(download_path)}"
+
+        logger.info(
+            "EnMAP scene download complete: %s",
+            download_path,
         )
-        '''
 
         return download_path

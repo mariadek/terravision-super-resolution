@@ -64,9 +64,10 @@ def create_output_path(
         exist_ok=True,
     )
 
-    stem = hs_path.stem.replace(
-        "_ORTHO_CROPPED",
-        "",
+    stem = (
+        hs_path.stem
+        .replace("_ORTHO_CROPPED", "")
+        .replace("_COG", "")
     )
 
     return output_dir / f"{stem}_PANSHARPENED.TIF"

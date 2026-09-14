@@ -14,6 +14,7 @@ from pyproj import Transformer
 from arosics import COREG_LOCAL
 from skimage.transform import resize
 from tqdm import tqdm
+from dotenv import load_dotenv
 
 from enmap_pansharpening.download.enmap import EnMAPDownloader
 from enmap_pansharpening.download.sentinel2 import Sentinel2Downloader
@@ -26,7 +27,6 @@ import enmap_pansharpening.pansharpening as pansharpening
 from enmap_pansharpening.reconstruction import (
     reconstruct_pansharpened_images,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -49,33 +49,35 @@ class PipelineConfig:
     EnMAP Pansharpening pipeline.
     """
 
-    def __init__(self):
+    def __init__(self, config):
 
-        '''
-        # 2nd stage pansharpening configs
-        NODATA = -32768.0
-        DEFAULT_CHUNK_SIZE = 128
-        DEFAULT_PADDING = 16
-        DEFAULT_SCALE_RATIO = 3
-        '''
+        PROJECT_ROOT = Path(__file__).resolve().parents[1]
+        load_dotenv(PROJECT_ROOT / ".env")
 
         # ---------------------------------------------------------
         # Data repository configuration
         # ---------------------------------------------------------
-
+        self.data_directory = Path("data")
         self.enmap_data_root = Path("data/enmap/ENMAP_HSI_L2A")
         self.sen2_data_root =  Path("data/sentinel2/sentinel-2-l2a")
 
         # ---------------------------------------------------------
         # Image search configuration
         # ---------------------------------------------------------
-        self.image_search_provider = "sentinel"
 
         self.max_cloud_cover = 10
 
         self.max_results = 3
 
-        self.overlap_percentage = 90
+        self.overlap_percentage = 70
+
+        self.max_time_diff = 1 # hours
+
+        # ---------------------------------------------------------
+        # CDSE Sentinel-2 Download Configuration
+        # ---------------------------------------------------------
+
+        self.download_full_sen2_item = False
 
         # ---------------------------------------------------------
         # Processing configuration
@@ -87,11 +89,10 @@ class PipelineConfig:
         # ---------------------------------------------------------
         self.output_directory = Path("outputs")
 
-        self.output_format = "geotiff"
 
         # Temporary processing files
         self.temp_directory = Path("data/tmp")
-        self.cleanup_tmp = False
+        self.cleanup_data_tmp = True
         self.request_delay_seconds = 2
 
     # =============================================================
@@ -179,8 +180,8 @@ class PipelineConfig:
         for enmap_scene in enmap_scenes:
             dt = enmap_scene.acquisition_datetime
 
-            start = dt - timedelta(hours=1)
-            end = dt + timedelta(hours=1)
+            start = dt - timedelta(hours=self.max_time_diff)
+            end = dt + timedelta(hours=self.max_time_diff)
 
             s2_datetime = (
                 f"{start.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-4]}/"
@@ -258,12 +259,34 @@ class PipelineConfig:
 
                 # Sentinel-2 download 
                 for sen2_scene in scenes:
-                    sen2_download_path = sentinel2_downloader.download_item(
-                        sen2_scene.item,
-                        download_root=self.sen2_data_root
-                    )   
+                    if self.download_full_sen2_item:
+                        # Download the whole Sentinel-2 item
+                        sen2_download_path = sentinel2_downloader.download_item(
+                            sen2_scene.item,
+                            download_root=self.sen2_data_root
+                        )
 
-                    images.append([os.path.join(self.enmap_data_root, enmap_scene.item.id), os.path.join(self.sen2_data_root, sen2_scene.item.id)])
+                    else:
+                        # Download only the required Sentinel-2 10 m bands
+                        sen2_download_paths = sentinel2_downloader.download_s3_assets(
+                            sen2_scene.item,
+                            ("B04_10m", "B03_10m", "B02_10m", "B08_10m"),
+                            download_root=self.sen2_data_root
+                        )
+
+                        # In this case the Sentinel-2 data are stored under the scene directory
+                        sen2_download_path = os.path.join(
+                            self.sen2_data_root,
+                            sen2_scene.item.id
+                        )
+
+                    images.append([
+                        os.path.join(
+                            self.enmap_data_root,
+                            enmap_scene.item.id
+                        ),
+                        sen2_download_path
+                    ])
                 
             else:
                 # Remove EnMAP scene entry from sen2_scenes
@@ -274,7 +297,7 @@ class PipelineConfig:
                 "No matching Sentinel-2 scenes found for any EnMAP scene. "
                 "Pansharpening cannot be performed."
             )
-            raise RuntimeError("No matching Sentinel-2 scenes found; pansharpening cannot be performed.")
+            return 
 
         return images
         
@@ -363,12 +386,12 @@ class PipelineConfig:
 
         return processed_path, wavelength_sel, fwhm_sel
 
-    def preprocess_sentinel2(
+    def preprocess_sentinel2_zip(
         self,
         sentinel2_path: str | Path,
     ) -> tuple[Path, Path]:
         """
-        Extract Sentinel-2 bands and create the mean/PseudoPAN image.
+        Extract Sentinel-2 bands from zip and create the mean/PseudoPAN image.
 
         Returns:
             Sentinel-2 B04 path and mean/PseudoPAN path.
@@ -376,17 +399,12 @@ class PipelineConfig:
 
         sentinel2_path = Path(sentinel2_path)
 
-        product_zip = next(
-            sentinel2_path.rglob("S2*.zip"),
-            None,
-        )
-
-        if product_zip is None:
+        if sentinel2_path is None:
             raise FileNotFoundError(
-                f"No S2*.zip file found under {sentinel2_path}"
+               f"Expected file not found: {sentinel2_path}"
             )
 
-        sentinel2 = Sentinel2(product_zip)
+        sentinel2 = Sentinel2(s2_zip = str(sentinel2_path))
 
         self.temp_directory.mkdir(
             parents=True,
@@ -397,6 +415,19 @@ class PipelineConfig:
             output_directory=self.temp_directory,
         )
 
+        
+        band_names = ["B02", "B03", "B04", "B08"]
+
+        band_files = [
+            os.path.join(
+                self.temp_directory,
+                f"{sentinel2_path.stem}_{band_name}.tiff",
+            )
+            for band_name in band_names
+        ]
+
+        sentinel2.selectedbands = band_files
+
         pan_path = Path(
             sentinel2.create_mean_image(
                 output_directory=self.temp_directory,
@@ -405,8 +436,83 @@ class PipelineConfig:
 
         b04_path = (
             self.temp_directory
-            / f"{product_zip.stem}_B04.tiff"
+            / f"{sentinel2_path.stem}_B04.tiff"
         )
+
+        if not b04_path.is_file():
+            raise FileNotFoundError(
+                f"Expected extracted B04 file not found: {b04_path}"
+            )
+
+        if not pan_path.is_file():
+            raise FileNotFoundError(
+                f"Expected mean/PseudoPAN file not found: {pan_path}"
+            )
+
+        return b04_path, pan_path
+
+    def preprocess_sentinel2_assets(
+        self,
+        sentinel2_path: str | Path,
+    ) -> tuple[Path, Path]:
+        """
+        Create the mean/PseudoPAN image from Sentinel-3 assets.
+
+        Returns:
+            Sentinel-2 B04 path and mean/PseudoPAN path.
+        """
+
+        sentinel2_path = Path(sentinel2_path)
+
+        band_names = [
+            "B02_10m.jp2",
+            "B03_10m.jp2",
+            "B04_10m.jp2",
+            "B08_10m.jp2",
+        ]
+
+        band_files = []
+
+        for band_name in band_names:
+            files = list(sentinel2_path.glob(f"*_{band_name}"))
+
+            if not files:
+                raise FileNotFoundError(
+                    f"No {band_name} file found in {sentinel2_path}"
+                )
+
+            if len(files) > 1:
+                raise RuntimeError(
+                    f"Multiple {band_name} files found in {sentinel2_path}: "
+                    f"{[f.name for f in files]}"
+                )
+
+            band_files.append(files[0])
+
+            logger.info(
+                "Found Sentinel-2 band %s: %s",
+                band_name,
+                files[0],
+            )
+
+        sentinel2 = Sentinel2(subdatasets = band_files)
+
+        self.temp_directory.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        pan_path = Path(
+            sentinel2.create_mean_image(
+                output_directory=self.temp_directory,
+            )
+        )
+
+        b04_path = next(
+            path for path in band_files
+            if path.name.endswith("B04_10m.jp2")
+        )
+
 
         if not b04_path.is_file():
             raise FileNotFoundError(
@@ -439,12 +545,19 @@ class PipelineConfig:
                 processed_enmap,
                 wavelength,
                 fwhm,
-            ) = self.preprocess_enmap(enmap_path)
+            ) = self.preprocess_enmap(enmap_path)        
 
-            (
-                sentinel2_b04,
-                sentinel2_pan,
-            ) = self.preprocess_sentinel2(sentinel2_path)
+            if self.download_full_sen2_item:
+                (
+                    sentinel2_b04,
+                    sentinel2_pan,
+                ) = self.preprocess_sentinel2_zip(sentinel2_path)
+            else:
+                 (
+                    sentinel2_b04,
+                    sentinel2_pan,
+                ) = self.preprocess_sentinel2_assets(sentinel2_path)
+
 
             processed_pairs.append(
                 PreprocessedPair(
@@ -487,6 +600,7 @@ class PipelineConfig:
                 "resamp_alg_calc": "nearest",
                 "max_shift": 30,
                 "nodata": (0, -32768),
+                "q": True
             }
 
             coreg = COREG_LOCAL(
@@ -688,29 +802,32 @@ class PipelineConfig:
 
 
     def housekeeping(self) -> None:
-        """Remove temporary processing files while preserving source data and outputs."""
-        if not self.temp_directory.exists():
-            logger.info("No temporary files to clean up.")
+        """Remove the entire data and tmp directory."""
+        if not self.data_directory.exists():
+            logger.info("No data directory to clean up.")
             return
 
-        logger.info("Cleaning temporary directory: %s", self.temp_directory)
+        logger.info(
+            "Cleaning data directory: %s",
+            self.data_directory,
+        )
 
         try:
-            shutil.rmtree(self.temp_directory)
+            shutil.rmtree(self.data_directory)
         except OSError as exc:
             logger.warning(
-                "Could not completely remove temporary directory %s: %s",
-                self.temp_directory,
+                "Could not completely remove data directory %s: %s",
+                self.data_directory,
                 exc,
             )
         else:
-            logger.info("Temporary files removed successfully.")
+            logger.info("Data directory removed successfully.")
 
     # =============================================================
     # MAIN PIPELINE
     # =============================================================
 
-    def run(self, aoi: dict, datetime: str | None = None):
+    def run(self, aoi: dict, datetime: str | None = None, config: dict | None = None):
         """
         Execute the complete TERRAVISION EnMAP pansharpening pipeline.
 
@@ -727,12 +844,18 @@ class PipelineConfig:
 
         # 1. Search EnMAP scenes using the runtime AOI and optional datetime.
         enmap_scenes = self.search_enmap_images(aoi, datetime=datetime)
+        if len(enmap_scenes) == 0:
+            logger.info("Pipeline stopped.")
+            return
 
         # 2. Search temporally matching Sentinel-2 scenes.
         sentinel2_scenes = self.search_sentinel2_images(enmap_scenes, aoi)
 
         # 3. Download source imagery.
         downloads = self.download_images(enmap_scenes, sentinel2_scenes)
+        if downloads is None:
+            logger.info("Pipeline stopped.")
+            return
 
         # 4. Preprocess source imagery and retain explicit paths/metadata.
         processed = self.preprocess_pairs(downloads)
@@ -764,7 +887,7 @@ class PipelineConfig:
         # 11. TODO: Upload final products to ICCS S3.
 
         # 12. Remove temporary processing files only after successful completion.
-        if self.cleanup_tmp:
+        if self.cleanup_data_tmp:
             self.housekeeping()
 
         logger.info("Pipeline finished successfully")

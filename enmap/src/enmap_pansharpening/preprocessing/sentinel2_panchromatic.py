@@ -1,15 +1,25 @@
 
 
 import os
+import re
 from osgeo import gdal
 from pathlib import Path
 
 class Sentinel2:
     """Utilities for reading and extracting Sentinel-2 bands from a ZIP file."""
 
-    def __init__(self, s2_zip):
+    def __init__(self, s2_zip=None, subdatasets=None, selectedbands=None):
+        if s2_zip is None and subdatasets is None:
+            raise ValueError(
+                "At least one of s2_zip or subdatasets must be provided."
+            )
+
         self.s2_zip = s2_zip
-        self.subdatasets = None
+        self.subdatasets = subdatasets
+        self.selectedbands = selectedbands
+
+        if self.s2_zip is None:
+            self.selectedbands = self.subdatasets
 
     def read_sentinel2_zip(self):
         """Open the Sentinel-2 ZIP and get its subdatasets."""
@@ -92,22 +102,11 @@ class Sentinel2:
     def create_mean_image(self, output_directory):
         """Create an image from the pixel-wise mean of B02, B03, B04 and B08."""
 
-        zip_name = Path(self.s2_zip).stem
-
-        band_names = ["B02", "B03", "B04", "B08"]
-
-        band_files = [
-            os.path.join(
-                output_directory,
-                f"{zip_name}_{band_name}.tiff",
-            )
-            for band_name in band_names
-        ]
 
         # Open the four bands
-        datasets = [gdal.Open(filepath) for filepath in band_files]
+        datasets = [gdal.Open(filepath) for filepath in self.selectedbands]
 
-        for filepath, ds in zip(band_files, datasets):
+        for filepath, ds in zip(self.selectedbands, datasets):
             assert ds is not None, (
                 f"Could not open Sentinel-2 band: {filepath}"
             )
@@ -124,10 +123,26 @@ class Sentinel2:
         # Use the first band as reference for spatial information
         reference_ds = datasets[0]
 
-        output_filepath = os.path.join(
-            output_directory,
-            f"{zip_name}_mean.tiff",
-        )
+        path = Path(self.selectedbands[0])
+
+        if path.suffix.lower() == ".jp2":
+            # Extracted Sentinel-2 band:
+            # parent directory contains the product name
+            product_name = path.parent.name
+
+        elif path.suffix.lower() in (".tif", ".tiff"):
+            # Generated asset:
+            # remove _B02, _B03, etc.
+            product_name = re.sub(
+                r"_B\d{2}$",
+                "",
+                path.stem,
+            )
+
+        else:
+            raise ValueError(f"Unsupported band file: {path}")
+
+        output_filepath = Path(output_directory) / f"{product_name}_mean.tiff"
 
         driver = gdal.GetDriverByName("GTiff")
 
@@ -137,6 +152,12 @@ class Sentinel2:
             reference_ds.RasterYSize,
             1,
             gdal.GDT_Float32,
+            options=[
+                "COMPRESS=DEFLATE",
+                "TILED=YES",
+                "PREDICTOR=3",
+                "BIGTIFF=IF_SAFER",
+            ],
         )
 
         out.SetGeoTransform(reference_ds.GetGeoTransform())
@@ -158,3 +179,6 @@ class Sentinel2:
         mean_image = None
 
         return output_filepath
+
+
+    

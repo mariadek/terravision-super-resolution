@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from PipelineConfig import PipelineConfig
-
+from config import load_config
 
 logging.basicConfig(
     level=logging.INFO,
@@ -192,11 +192,14 @@ def main(user_input_path: str) -> None:
             "No acquisition datetime provided"
         )
 
-    pipeline = PipelineConfig()
+    config = load_config("configs/example.yaml")
+
+    pipeline = PipelineConfig(config)
 
     pipeline.run(
         aoi=aoi,
         datetime=acquisition_datetime,
+        config=config
     )
 
     logger.info(
