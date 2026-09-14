@@ -29,11 +29,14 @@ SENTINEL-2 ───► Find/download
                       │
                       ▼  
             Common-area cropping
-                      ▼
+                      │
+                      ▼  
             Pansharpening stage 1
-                      ▼
+                      │
+                      ▼  
                Optional AOI crop
-                      ▼
+                      │
+                      ▼  
          Pansharpening reconstruction
                       │
                       ▼
@@ -76,13 +79,13 @@ Clone via:
 ## Usage
 
 ### Python 
-
-python src/main.py --user_input ./examples/La_Zarza_aoi.json
-
+```bash
+      python src/main.py --user_input ./examples/La_Zarza_aoi.json
+```
 ### Docker
-
+```bash
 AOI_FILE=examples/La_Zarza_aoi.json docker compose run --rm enmap_pansharp
-
+```
 ## Outputs
 
 The primary output is a spatially enhanced **EnMAP hyperspectral product** with a target spatial resolution of **10 m**.
