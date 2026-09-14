@@ -198,7 +198,7 @@ def main(user_input_path: str, config_path: str) -> None:
 
     pipeline.run(
         aoi=aoi,
-        datetime=acquisition_datetime,
+        datetime=acquisition_datetime
     )
 
     logger.info(
@@ -209,7 +209,7 @@ def main(user_input_path: str, config_path: str) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description=(
-            "TERRAVISION EnMAP Pansharpening Pipeline"
+            "TERRAVISION Sentinel-3 LST Thermal Sharpening Pipeline"
         )
     )
 

@@ -6,3 +6,8 @@ shapely
 pyproj
 rasterio
 scikit-image
+httpx
+tqdm
+boto3
+numba
+netCDF4

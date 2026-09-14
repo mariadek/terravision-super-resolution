@@ -819,7 +819,7 @@ class PipelineConfig:
     # MAIN PIPELINE
     # =============================================================
 
-    def run(self, aoi: dict, datetime: str | None = None, config: dict | None = None):
+    def run(self, aoi: dict, datetime: str | None = None):
         """
         Execute the complete TERRAVISION EnMAP pansharpening pipeline.
 
