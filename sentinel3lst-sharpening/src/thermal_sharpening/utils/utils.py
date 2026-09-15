@@ -4,6 +4,7 @@ import scipy.ndimage as ndi
 from osgeo import gdal
 from numba import njit, stencil
 from shapely.geometry import shape
+from pathlib import Path
 
 def intersection_percentage(aoi_geojson, multipolygon_geojson):
     # Convert both geometries to shapely
@@ -21,12 +22,15 @@ def intersection_percentage(aoi_geojson, multipolygon_geojson):
 
     return (intersection_area / aoi_area) * 100
 
-def mask_extractor(mask, highresfile):
+def mask_resampling(mask, highresfile, output_dir):
 
     ds10 = gdal.Open(highresfile)
     ds20 = gdal.Open(mask)
 
-    output = mask.replace('_SCL_20m.jp2', '_SCL_10m.tiff')
+    output = output_dir / Path(mask).name.replace(
+        '_SCL_20m.jp2',
+        '_SCL_10m.tiff'
+    )
 
     driver = gdal.GetDriverByName('GTiff')
     # RasterXSize - columns

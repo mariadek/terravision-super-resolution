@@ -1,5 +1,6 @@
 import math
 import os
+import re
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any, Optional
@@ -9,6 +10,10 @@ import pandas as pd
 from osgeo import gdal
 from sklearn import ensemble, linear_model, tree
 from tqdm import tqdm
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 import thermal_sharpening.utils.utils as utils # Required by residual smoothing / edge filling.
 
@@ -29,6 +34,7 @@ BAND_DESCRIPTIONS = {
 }
 FEATURE_ORDER = tuple(BAND_DESCRIPTIONS.values())
 NODATA_LR = -32768.0
+NODATA_OUT = -9999.0
 
 
 class DecisionTreeSharpener:
@@ -140,7 +146,7 @@ class DecisionTreeSharpener:
     @staticmethod
     def _read_band_window(bands, xoff, yoff, xsize, ysize):
         arrays = [
-            bands[name].ReadAsArray(xoff, yoff, xsize, ysize).astype(np.float64)
+            bands[name].ReadAsArray(xoff, yoff, xsize, ysize).astype(np.float32)
             for name in FEATURE_ORDER
         ]
         return np.stack(arrays, axis=-1)
@@ -216,7 +222,10 @@ class DecisionTreeSharpener:
             )
             candidate_pixels = np.argwhere(valid_lr)
 
-            print(f"Extracting {len(candidate_pixels)} candidate samples...")
+            logger.info(
+                "Extracting %d candidate samples...",
+                len(candidate_pixels),
+            )
             records = []
 
             for i, j in tqdm(candidate_pixels, desc="Samples"):
@@ -262,9 +271,9 @@ class DecisionTreeSharpener:
                 self.cvHomogeneityThreshold = float(
                     np.nanpercentile(df["cv"].to_numpy(), self.percentileThreshold)
                 )
-                print(
-                    "Automatically selected CV homogeneity threshold: "
-                    f"{self.cvHomogeneityThreshold:.6g}"
+                logger.info(
+                    "Automatically selected CV homogeneity threshold: %.6g",
+                    self.cvHomogeneityThreshold,
                 )
 
             df = df.loc[df["cv"] <= self.cvHomogeneityThreshold].copy()
@@ -339,18 +348,21 @@ class DecisionTreeSharpener:
                 ["temperature", "s2-col", "s2-row", "weight", "features"]
             ].reset_index(drop=True)
 
-            samples_path = Path(self.highResFile).parent / "samples.csv"
+            samples_path = (
+                Path(self.lowResFile).parent
+                / f"{Path(self.lowResFile).stem}_samples.csv"
+            )
             self.df.to_csv(samples_path, index=False)
 
-            print(f"Candidate samples: {len(candidate_pixels)}")
-            print(f"Homogeneous samples used: {len(self.df)}")
-            print(f"Homogeneous sample mask: {homogeneous_mask_path}")
+            logger.info("Candidate samples: %d", len(candidate_pixels))
+            logger.info("Homogeneous samples used: %d", len(self.df))
+            logger.info("Homogeneous sample mask: %s", homogeneous_mask_path)
 
             windows, extents = self._build_windows(size_x, size_y)
             self.windowExtents = extents
             self.reg = [None] * len(windows)
 
-            print("Training...")
+            logger.info("Training...")
             for idx, window in enumerate(tqdm(windows, desc="Models")):
                 local = idx < len(windows) - 1
                 y0, y1, x0, x1 = window
@@ -448,9 +460,11 @@ class DecisionTreeSharpener:
             extents = self.windowExtents or [[0, size_y, 0, size_x]]
             workers = min(self.predictionWorkers, len(extents))
 
-            print(
-                f"Predicting {len(extents)} windows with "
-                f"{workers} worker{'s' if workers != 1 else ''}..."
+            logger.info(
+                "Predicting %d windows with %d worker%s...",
+                len(extents),
+                workers,
+                "s" if workers != 1 else "",
             )
 
             if workers == 1:
@@ -463,10 +477,10 @@ class DecisionTreeSharpener:
                     )
                     y0, y1, x0, x1 = extent
                     out_local.GetRasterBand(1).WriteArray(
-                        local_pred, xoff=x0, yoff=y0
+                        np.nan_to_num(local_pred, nan=NODATA_OUT), xoff=x0, yoff=y0
                     )
                     out_global.GetRasterBand(1).WriteArray(
-                        global_pred, xoff=x0, yoff=y0
+                        np.nan_to_num(global_pred, nan=NODATA_OUT), xoff=x0, yoff=y0
                     )
             else:
                 # Keep only a small number of windows in flight so memory use
@@ -508,10 +522,10 @@ class DecisionTreeSharpener:
 
                             y0, y1, x0, x1 = extent
                             out_local.GetRasterBand(1).WriteArray(
-                                local_pred, xoff=x0, yoff=y0
+                                np.nan_to_num(local_pred, nan=NODATA_OUT), xoff=x0, yoff=y0
                             )
                             out_global.GetRasterBand(1).WriteArray(
-                                global_pred, xoff=x0, yoff=y0
+                                np.nan_to_num(global_pred, nan=NODATA_OUT), xoff=x0, yoff=y0
                             )
                             progress.update(1)
 
@@ -592,12 +606,19 @@ class DecisionTreeSharpener:
 
     @staticmethod
     def _create_output(driver, path, template, size_x, size_y):
-        out = driver.Create(str(path), size_x, size_y, 1, gdal.GDT_Float32)
+        out = driver.Create(
+            str(path),
+            size_x,
+            size_y,
+            1,
+            gdal.GDT_Float32,
+            options=["TILED=YES", "COMPRESS=DEFLATE", "PREDICTOR=3", "BIGTIFF=IF_SAFER"],
+        )
         if out is None:
             raise RuntimeError(f"Could not create output raster: {path}")
         out.SetGeoTransform(template.GetGeoTransform())
         out.SetProjection(template.GetProjection())
-        out.GetRasterBand(1).SetNoDataValue(np.nan)
+        out.GetRasterBand(1).SetNoDataValue(NODATA_OUT)
         return out
 
     # ------------------------------------------------------------------
@@ -628,6 +649,8 @@ class DecisionTreeSharpener:
         try:
             local_values = local_ds.GetRasterBand(1).ReadAsArray().astype(float)
             global_values = global_ds.GetRasterBand(1).ReadAsArray().astype(float)
+            local_values[local_values == NODATA_OUT] = np.nan
+            global_values[global_values == NODATA_OUT] = np.nan
 
             combined = local_values * ww + global_values * fw
 
@@ -646,7 +669,7 @@ class DecisionTreeSharpener:
                 combined.shape[0],
             )
 
-            out.GetRasterBand(1).WriteArray(combined)
+            out.GetRasterBand(1).WriteArray(np.nan_to_num(combined, nan=NODATA_OUT))
             out.FlushCache()
             out = None
 
@@ -694,6 +717,7 @@ class DecisionTreeSharpener:
                 values = result_ds.GetRasterBand(1).ReadAsArray(
                     xoff, yoff, xsize, ysize
                 ).astype(float)
+                values[values == NODATA_OUT] = np.nan
 
                 if not np.any(np.isfinite(values)):
                     continue
@@ -750,7 +774,7 @@ class DecisionTreeSharpener:
             mask_lr = None
             result_ds = None
 
-    def residualAnalysis(self, disaggregatedFile):
+    def residualAnalysis(self, disaggregatedFile, output_dir):
         residual_hr, residual_lr = self._calculateResidual(disaggregatedFile)
 
         scene_hr = self._open_raster(disaggregatedFile, "disaggregated image")
@@ -758,6 +782,7 @@ class DecisionTreeSharpener:
 
         try:
             values = scene_hr.GetRasterBand(1).ReadAsArray().astype(float)
+            values[values == NODATA_OUT] = np.nan
 
             if self.disaggregatingTemperature:
                 corrected_energy = residual_hr + values ** 4
@@ -767,15 +792,30 @@ class DecisionTreeSharpener:
             else:
                 corrected = values + residual_hr
 
-            out_path = (
-                Path(self.lowResFile).parent
-                / f"TS_{self._output_stem(self.lowResFile)}.tiff"
+            output_dir = Path(output_dir)
+            output_dir.mkdir(
+                parents=True,
+                exist_ok=True,
             )
+
+            sen3_id = Path(self.lowResFile).stem.removeprefix("Subset_")
+            sen2_parts = Path(self.highResFile).stem.removeprefix("SR_").split("_")
+
+            satellite = sen2_parts[0]  # e.g. S2B
+
+            tile = next(
+                part
+                for part in sen2_parts
+                if re.fullmatch(r"T\d{2}[A-Z]{3}", part)
+            )
+
+            output_path = output_dir / f"TS_{sen3_id}_{satellite}_{tile}.tiff"
+
             driver = gdal.GetDriverByName("GTiff")
             out = self._create_output(
-                driver, out_path, scene_hr, scene_hr.RasterXSize, scene_hr.RasterYSize
+                driver, output_path, scene_hr, scene_hr.RasterXSize, scene_hr.RasterYSize
             )
-            out.GetRasterBand(1).WriteArray(corrected)
+            out.GetRasterBand(1).WriteArray(np.nan_to_num(corrected, nan=NODATA_OUT))
             out.FlushCache()
             out = None
 
@@ -797,14 +837,20 @@ class DecisionTreeSharpener:
                 scene_lr.RasterXSize,
                 scene_lr.RasterYSize,
             )
-            out_res.GetRasterBand(1).WriteArray(residual_lr_display)
+            out_res.GetRasterBand(1).WriteArray(np.nan_to_num(residual_lr_display, nan=NODATA_OUT))
             out_res.FlushCache()
             out_res = None
 
-            print(f"LR residual bias: {np.nanmean(residual_lr_display)}")
-            print(f"LR residual RMSD: {np.sqrt(np.nanmean(residual_lr_display ** 2))}")
+            logger.info(
+                "LR residual bias: %.6f",
+                np.nanmean(residual_lr_display),
+            )
 
-            return str(out_path)
+            logger.info(
+                "LR residual RMSD: %.6f",
+                np.sqrt(np.nanmean(residual_lr_display ** 2)),
+            )
+            return str(output_path)
         finally:
             scene_hr = None
             scene_lr = None
@@ -816,7 +862,10 @@ class DecisionTreeSharpener:
     def _doFit(self, goodData_LR, goodData_HR, weight, local):
         options = dict(self.regressorOpt)
         options["max_leaf_nodes"] = 10 if local else 30
-        options["min_samples_leaf"] = 10
+        n_samples = int(goodData_HR.shape[0])
+        if n_samples < 2:
+            raise ValueError("At least two training samples are required to fit a model.")
+        options["min_samples_leaf"] = min(10, max(1, n_samples // 3))
 
         if self.perLeafLinearRegression:
             base_regressor = DecisionTreeRegressorWithLinearLeafRegression(
