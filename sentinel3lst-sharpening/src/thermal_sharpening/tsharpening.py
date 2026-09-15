@@ -769,7 +769,7 @@ class DecisionTreeSharpener:
 
             out_path = (
                 Path(self.lowResFile).parent
-                / f"Corrected_{self._output_stem(self.lowResFile)}.tiff"
+                / f"TS_{self._output_stem(self.lowResFile)}.tiff"
             )
             driver = gdal.GetDriverByName("GTiff")
             out = self._create_output(

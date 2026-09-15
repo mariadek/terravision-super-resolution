@@ -1,7 +1,6 @@
-import rasterio
 import hashlib
+import rasterio
 from shapely.geometry import shape
-
 
 def intersection_percentage(aoi_geojson, multipolygon_geojson):
     # Convert both geometries to shapely
@@ -36,8 +35,6 @@ def find_band(HS_path, target_wavelength):
             range(len(wavelengths)),
             key=lambda i: abs(wavelengths[i] - target)
         )
-
-        print("Closest wavelength:", wavelengths[closest_index])
 
         return closest_index + 1
 

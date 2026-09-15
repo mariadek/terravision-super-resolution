@@ -1,11 +1,11 @@
-import argparse
 import json
+import argparse
 import logging
-from pathlib import Path
 from typing import Any
+from pathlib import Path
 
-from PipelineConfig import PipelineConfig
 from config import load_config
+from PipelineConfig import PipelineConfig
 
 logging.basicConfig(
     level=logging.INFO,
@@ -15,80 +15,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def validate_coordinates(coordinates: Any) -> None:
-    """Recursively validate GeoJSON coordinates."""
-
-    if not isinstance(coordinates, list) or not coordinates:
-        raise ValueError("GeoJSON 'coordinates' must be a non-empty list.")
-
-    # Coordinate pair: [longitude, latitude]
-    if all(isinstance(value, (int, float)) for value in coordinates):
-        if len(coordinates) < 2:
-            raise ValueError(
-                "Each coordinate must contain at least "
-                "[longitude, latitude]."
-            )
-
-        lon, lat = coordinates[:2]
-
-        if not -180 <= lon <= 180:
-            raise ValueError(
-                f"Invalid longitude {lon}. "
-                "Longitude must be between -180 and 180."
-            )
-
-        if not -90 <= lat <= 90:
-            raise ValueError(
-                f"Invalid latitude {lat}. "
-                "Latitude must be between -90 and 90."
-            )
-
-        return
-
-    for item in coordinates:
-        validate_coordinates(item)
-
-
 def validate_aoi(aoi: Any) -> Any:
-    """Validate either a bounding box or GeoJSON geometry."""
+    """Validate GeoJSON geometry."""
 
-    # --------------------------------------------------
-    # Option 1: Bounding box
-    # [min_lon, min_lat, max_lon, max_lat]
-    # --------------------------------------------------
-    if isinstance(aoi, list):
-        if len(aoi) != 4:
-            raise ValueError(
-                "Bounding-box AOI must contain four values: "
-                "[min_lon, min_lat, max_lon, max_lat]."
-            )
-
-        if not all(isinstance(value, (int, float)) for value in aoi):
-            raise ValueError("AOI bounding-box coordinates must be numeric.")
-
-        min_lon, min_lat, max_lon, max_lat = aoi
-
-        if not (-180 <= min_lon <= 180 and -180 <= max_lon <= 180):
-            raise ValueError(
-                "AOI longitude values must be between -180 and 180."
-            )
-
-        if not (-90 <= min_lat <= 90 and -90 <= max_lat <= 90):
-            raise ValueError(
-                "AOI latitude values must be between -90 and 90."
-            )
-
-        if min_lon >= max_lon or min_lat >= max_lat:
-            raise ValueError(
-                "Invalid AOI bounding box: minimum coordinates must "
-                "be smaller than maximum coordinates."
-            )
-
-        return [float(value) for value in aoi]
-
-    # --------------------------------------------------
-    # Option 2: GeoJSON geometry
-    # --------------------------------------------------
     if isinstance(aoi, dict):
         geometry_type = aoi.get("type")
         coordinates = aoi.get("coordinates")
@@ -103,7 +32,6 @@ def validate_aoi(aoi: Any) -> Any:
                 "GeoJSON AOI is missing the 'coordinates' field."
             )
 
-        validate_coordinates(coordinates)
 
         return {
             "type": geometry_type,
@@ -218,7 +146,7 @@ if __name__ == "__main__":
         required=True,
         help=(
             "Path to a JSON file containing a GeoJSON AOI "
-            "or bounding box and an optional acquisition datetime."
+            "with a bounding box and an optional acquisition datetime."
         ),
     )
 

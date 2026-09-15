@@ -1,18 +1,19 @@
-from pathlib import Path
-from datetime import timedelta
-from dataclasses import dataclass
-
 import os
 import time
 import logging
 import shutil
+from pathlib import Path
+from datetime import timedelta
+from dataclasses import dataclass
+
 
 import rasterio
-from rasterio.windows import Window
 import numpy as np
+from rasterio.windows import Window
 from pyproj import Transformer
 from arosics import COREG_LOCAL
 from skimage.transform import resize
+
 from dotenv import load_dotenv
 
 from enmap_pansharpening.download.enmap import EnMAPDownloader
@@ -28,7 +29,6 @@ from enmap_pansharpening.reconstruction import (
 )
 
 logger = logging.getLogger(__name__)
-
 
 @dataclass
 class PreprocessedPair:

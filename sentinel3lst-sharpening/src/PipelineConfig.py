@@ -194,20 +194,14 @@ class PipelineConfig:
             time.sleep(2)  # Avoid rate limiting
 
         # Sort Sentinel-3 scenes for each Sentinel-2 scene
-        for sen2sr_scene in sen2sr_scenes:
-
-            scene_id = sen2sr_scene.scene_id
-
-            if scene_id not in sen3_scenes:
-                continue
-
-            sen3_scenes[scene_id].sort(
+        for scene_id, scenes in sen3_scenes.items():
+            scenes.sort(
                 key=lambda scene: (
-                    -scene.intersection_percentage,  # Higher is better
-                    scene.time_difference_minutes,   # Lower is better
+                    -scene.intersection_percentage,
+                    scene.time_difference_minutes,
                 )
             )
-            sen3_scenes[scene_id] = sen3_scenes[scene_id][0]
+            sen3_scenes[scene_id] = scenes[0]
 
         return sen3_scenes
 
@@ -310,35 +304,41 @@ class PipelineConfig:
 
     def unzip_sentinel3(self, inputs3):
         """
-        Unzip a Sentinel-3 SLSTR product if it has not already been extracted.
+        Unzip a Sentinel-3 SLSTR product into a tmp folder.
 
         Parameters
         ----------
         inputs3 : str or Path
             Path to the Sentinel-3 ZIP file.
-        lowResFilename : str or Path
-            Path to a file expected to exist after extraction.
 
         Returns
         -------
         Path
-            Path to the expected extracted file.
+            Path to the extracted .SEN3 directory.
         """
         zip_file = Path(inputs3)
-        low_res_file = Path(inputs3.replace(".zip", '.SEN3'))
+
+        # tmp folder next to the ZIP file
+        tmp_dir = Path("data/tmp")
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+
+        # Expected extracted Sentinel-3 directory
+        low_res_file = tmp_dir / f"{zip_file.stem}.SEN3"
 
         if low_res_file.exists():
             logger.info("Sentinel-3 SLSTR is already unzipped.")
             return low_res_file
 
         if not zip_file.exists():
-            raise FileNotFoundError(f"Sentinel-3 ZIP file not found: {zip_file}")
+            raise FileNotFoundError(
+                f"Sentinel-3 ZIP file not found: {zip_file}"
+            )
 
-        logger.info(f"Unzipping {zip_file.name}...")
+        logger.info(f"Unzipping {zip_file.name} to {tmp_dir}...")
 
         try:
             with ZipFile(zip_file, "r") as zip_obj:
-                zip_obj.extractall(zip_file.parent)
+                zip_obj.extractall(tmp_dir)
         except Exception as exc:
             raise RuntimeError(
                 f"Failed to unzip Sentinel-3 product: {zip_file}"
@@ -346,7 +346,7 @@ class PipelineConfig:
 
         if not low_res_file.exists():
             raise FileNotFoundError(
-                f"ZIP was extracted, but expected file was not found: "
+                f"ZIP was extracted, but expected directory was not found: "
                 f"{low_res_file}"
             )
 
@@ -432,9 +432,13 @@ class PipelineConfig:
             logger.warning("No SR Sentinel-2 images found for this aoi and datetime. You have to execute the Sentinel-2 SR workflow first.")
             return None
 
+        print('Sentinel2', len(sen2sr_scenes))
+
         
         # 3. Search Sentinel-3 SLSTR images using retrieved Sentinel-2 SR image footprints and acquisition datetime
         sen3_scenes = self.search_sentinel3_images(sen2sr_scenes, aoi)
+
+        print("sentinel3", len(sen3_scenes))
         
         if not sen3_scenes:
             logger.warning("No Sentinel-3 images found for the retrieved EnMAP images")
@@ -451,10 +455,10 @@ class PipelineConfig:
 
             logger.info(
                 f"Sen2SR scene {sen2sr_scene.scene_id}: "
+                f"Sen3 scene {s3_scene.scene_id} "
                 f"intersection: {s3_scene.intersection_percentage:.1f}% | "
                 f"time difference: {s3_scene.time_difference_minutes:.1f} min"
             )
-
 
         # 4. Search Sentinel-2 Cloud Mask from CDSE
         sen2_clouds = self.search_sentinel2_cloud(sen2sr_scenes)
@@ -476,6 +480,8 @@ class PipelineConfig:
             # Extract and Resample s2_mask at 10 meters
             s2_mask10m = mask_extractor(s2_mask20m, sen2sr_scene)
 
+            exit()
+
             # Get SR Sentinel-2 bounding box
             # Reproject Sentinel-3 SLSTR and crop to SR Sentinel-2 bounding box
             lowResFilename_reprojected, s3_mask = sentinel3_processor.s3_preprocessor(lowResFilename, sen2sr_scene)
@@ -487,49 +493,3 @@ class PipelineConfig:
             
 
         
-
-        '''
-
-        # 3. Download images
-        images = self.download_images(enmap_scenes, sen2_scenes)
-
-        # 4. Preprocess
-        # 4.1 Enmap remove bad bands
-        enmap_processed, enmap_metadata = self.enmap_bband_removal(images)
-
-        # Sentinel-2 extract 10 m and create panchromatic
-        sen2_processed = self.preprocess_sen2_images(images)
-
-        # 5. Coregistration
-
-        coregistered_pairs = self.coregistration(images)
-
-        # 6. Crop images
-        cropped_pairs, over_bboxes = self.crop(coregistered_pairs)
-
-        print('Cropped pairs', cropped_pairs)
-
-        # 7. Pansharpen - 1st Stage
-        images, pansharpening_products = self.pansharpen(cropped_pairs)
-
-        # 8. Crop to aoi 
-        if self.crop_to_aoi: 
-            print('Cropping')
-            images = self.crop_aoi(images, aoi, over_bboxes)
-
-        # 9. Pansharpening - Final Stage
-        pansharpened_images = self.pansharpening_2nd_stage(images, enmap_metadata, pansharpening_products)
-
-        # 10. Create json file for STAC 
-        '''
-
-
-        '''
-
-        # 11. Upload on ICCS S3
-        output = self.save_results(results)
-
-        logger.info("Pipeline finished successfully")
-
-        return output
-        '''
