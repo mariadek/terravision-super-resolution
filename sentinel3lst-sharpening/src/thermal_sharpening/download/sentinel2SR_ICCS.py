@@ -7,11 +7,6 @@ from pystac_client import Client
 
 import httpx
 from tqdm import tqdm
-from dotenv import load_dotenv
-
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-load_dotenv(PROJECT_ROOT / ".env.example")
-
 
 ICCS_STAC_URL = "https://platform-eo.iccs.gr/stac/" # STAC_ROOT
 ICCS_S2_COLLECTION = "sentinel-2-l2a-sr-10m"

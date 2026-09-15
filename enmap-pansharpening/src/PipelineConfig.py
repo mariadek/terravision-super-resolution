@@ -85,7 +85,7 @@ class PipelineConfig:
 
         # Temporary processing files
         self.temp_directory = Path("data/tmp")
-        self.cleanup_data_tmp = True
+        self.cleanup_data_tmp = False
         self.request_delay_seconds = 2
 
     # =============================================================

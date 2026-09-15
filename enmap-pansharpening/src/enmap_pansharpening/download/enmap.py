@@ -19,8 +19,8 @@ class EnMAPDownloader:
     """Search and download EnMAP scenes from the DLR STAC catalog."""
 
     def __init__(self):
-        self.username = os.environ["ENMAP_USERNAME"]
-        self.password = os.environ["ENMAP_PASSWORD"]
+        self.username = os.environ["DLR_USERNAME"]
+        self.password = os.environ["DLR_PASSWORD"]
 
         self.http = urllib3.PoolManager()
         self.headers = urllib3.make_headers(

@@ -1,6 +1,7 @@
 import math
 import os
 import re
+import tempfile
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any, Optional
@@ -32,10 +33,10 @@ BAND_DESCRIPTIONS = {
     "B11 (1610 nm)": "B11",
     "B12 (2190 nm)": "B12",
 }
+
 FEATURE_ORDER = tuple(BAND_DESCRIPTIONS.values())
 NODATA_LR = -32768.0
 NODATA_OUT = -9999.0
-
 
 class DecisionTreeSharpener:
     """Decision-tree based sharpening/disaggregation of low-resolution imagery.
@@ -625,60 +626,245 @@ class DecisionTreeSharpener:
     # Local/global combination and residual analysis
     # ------------------------------------------------------------------
 
-    def combination(self, local_result, global_result):
-        windowed_residual, _ = self._calculateResidual(local_result)
-        global_residual, _ = self._calculateResidual(global_result)
+    def combination(self, local_result, global_result, block_size=1024):
+        """Combine local/global predictions without loading full HR rasters into RAM.
 
-        eps = np.finfo(float).eps
-        local_inv = 1.0 / np.maximum(np.abs(windowed_residual), eps) ** 2
-        global_inv = 1.0 / np.maximum(np.abs(global_residual), eps) ** 2
+        The previous implementation materialized two high-resolution residual arrays,
+        two prediction arrays, and several weight arrays simultaneously. For large
+        scenes this can trigger the container OOM killer, which looks like an abrupt
+        Docker stop with no Python traceback.
 
-        denom = local_inv + global_inv
-
-        ww = np.divide(
-            local_inv,
-            denom,
-            out=np.full_like(denom, 0.5),
-            where=denom > 0
-        )
-        fw = 1.0 - ww
+        Residuals are now calculated on the low-resolution grid, warped to temporary
+        on-disk GeoTIFFs, and the final weighting is performed block-by-block.
+        """
+        block_size = max(128, int(block_size))
+        logger.info("Calculating low-resolution residuals for combination...")
+        local_residual_lr = self._calculateResidualLR(local_result)
+        global_residual_lr = self._calculateResidualLR(global_result)
 
         local_ds = self._open_raster(local_result, "local result")
         global_ds = self._open_raster(global_result, "global result")
-
         try:
-            local_values = local_ds.GetRasterBand(1).ReadAsArray().astype(float)
-            global_values = global_ds.GetRasterBand(1).ReadAsArray().astype(float)
-            local_values[local_values == NODATA_OUT] = np.nan
-            global_values[global_values == NODATA_OUT] = np.nan
+            if (
+                local_ds.RasterXSize != global_ds.RasterXSize
+                or local_ds.RasterYSize != global_ds.RasterYSize
+            ):
+                raise ValueError("Local and global result rasters must have the same size.")
 
-            combined = local_values * ww + global_values * fw
-
+            size_x = local_ds.RasterXSize
+            size_y = local_ds.RasterYSize
             out_path = (
                 Path(self.lowResFile).parent
                 / f"Combined_{self._output_stem(self.lowResFile)}.tiff"
             )
-
             driver = gdal.GetDriverByName("GTiff")
+            out = self._create_output(driver, out_path, local_ds, size_x, size_y)
 
-            out = self._create_output(
-                driver,
-                out_path,
-                local_ds,
-                combined.shape[1],
-                combined.shape[0],
-            )
+            with tempfile.TemporaryDirectory(prefix="sharpener_residual_") as tmpdir:
+                local_residual_path = Path(tmpdir) / "local_residual_hr.tif"
+                global_residual_path = Path(tmpdir) / "global_residual_hr.tif"
 
-            out.GetRasterBand(1).WriteArray(np.nan_to_num(combined, nan=NODATA_OUT))
+                self._warpResidualLRToHR(
+                    local_residual_lr, local_ds, local_residual_path
+                )
+                self._warpResidualLRToHR(
+                    global_residual_lr, global_ds, global_residual_path
+                )
+
+                # LR residual arrays are no longer needed once warped to disk.
+                del local_residual_lr, global_residual_lr
+
+                local_res_ds = self._open_raster(
+                    local_residual_path, "local residual"
+                )
+                global_res_ds = self._open_raster(
+                    global_residual_path, "global residual"
+                )
+                try:
+                    local_band = local_ds.GetRasterBand(1)
+                    global_band = global_ds.GetRasterBand(1)
+                    local_res_band = local_res_ds.GetRasterBand(1)
+                    global_res_band = global_res_ds.GetRasterBand(1)
+                    out_band = out.GetRasterBand(1)
+
+                    total_blocks = math.ceil(size_x / block_size) * math.ceil(
+                        size_y / block_size
+                    )
+                    logger.info(
+                        "Combining predictions in %d blocks (block size %d)...",
+                        total_blocks,
+                        block_size,
+                    )
+
+                    with tqdm(total=total_blocks, desc="Combining") as progress:
+                        for yoff in range(0, size_y, block_size):
+                            ysize = min(block_size, size_y - yoff)
+                            for xoff in range(0, size_x, block_size):
+                                xsize = min(block_size, size_x - xoff)
+
+                                local_values = local_band.ReadAsArray(
+                                    xoff, yoff, xsize, ysize
+                                ).astype(np.float32, copy=False)
+                                global_values = global_band.ReadAsArray(
+                                    xoff, yoff, xsize, ysize
+                                ).astype(np.float32, copy=False)
+                                local_res = local_res_band.ReadAsArray(
+                                    xoff, yoff, xsize, ysize
+                                ).astype(np.float32, copy=False)
+                                global_res = global_res_band.ReadAsArray(
+                                    xoff, yoff, xsize, ysize
+                                ).astype(np.float32, copy=False)
+
+                                local_valid = (
+                                    np.isfinite(local_values)
+                                    & (local_values != NODATA_OUT)
+                                )
+                                global_valid = (
+                                    np.isfinite(global_values)
+                                    & (global_values != NODATA_OUT)
+                                )
+
+                                # Equivalent to inverse-squared-residual weighting:
+                                # (1/L^2) / ((1/L^2) + (1/G^2)) = G^2/(L^2+G^2).
+                                # This form avoids enormous inverse values near zero.
+                                l2 = np.square(local_res, dtype=np.float32)
+                                g2 = np.square(global_res, dtype=np.float32)
+                                denom = l2 + g2
+                                ww = np.full(denom.shape, 0.5, dtype=np.float32)
+                                weight_valid = (
+                                    np.isfinite(denom)
+                                    & np.isfinite(g2)
+                                    & (denom > np.finfo(np.float32).eps)
+                                )
+                                np.divide(g2, denom, out=ww, where=weight_valid)
+
+                                combined = np.full(
+                                    local_values.shape, NODATA_OUT, dtype=np.float32
+                                )
+                                both = local_valid & global_valid
+                                combined[both] = (
+                                    local_values[both] * ww[both]
+                                    + global_values[both] * (1.0 - ww[both])
+                                )
+                                # If only one model has a valid value, keep it rather
+                                # than turning that pixel into NoData.
+                                only_local = local_valid & ~global_valid
+                                only_global = global_valid & ~local_valid
+                                combined[only_local] = local_values[only_local]
+                                combined[only_global] = global_values[only_global]
+
+                                out_band.WriteArray(combined, xoff=xoff, yoff=yoff)
+                                progress.update(1)
+                finally:
+                    local_res_ds = None
+                    global_res_ds = None
+
             out.FlushCache()
             out = None
-
-            # Return filename, not numpy array
             return str(out_path)
-
         finally:
             local_ds = None
             global_ds = None
+
+    def _calculateResidualLR(self, result):
+        """Calculate and smooth residuals only on the low-resolution grid."""
+        if utils is None:
+            raise ImportError(
+                "The residual-analysis methods require the project-specific "
+                "'utils' module (binomialSmoother/removeEdgeNaNs)."
+            )
+
+        scene_lr = self._open_raster(self.lowResFile, "low-resolution image")
+        mask_lr = self._open_raster(
+            self.lowResQualityFile, "low-resolution quality image"
+        )
+        result_ds = self._open_raster(result, "disaggregated result")
+        try:
+            low_data = scene_lr.ReadAsArray().astype(np.float64, copy=False)
+            low_quality = mask_lr.ReadAsArray()
+            valid_lr = (
+                np.isfinite(low_data)
+                & (low_data != NODATA_LR)
+                & self._low_quality_mask(low_quality)
+            )
+
+            size_x = result_ds.RasterXSize
+            size_y = result_ds.RasterYSize
+            residual_lr = np.full(low_data.shape, np.nan, dtype=np.float64)
+            result_band = result_ds.GetRasterBand(1)
+
+            for i, j in np.argwhere(valid_lr):
+                xoff = int(j * self.scaleFactor)
+                yoff = int(i * self.scaleFactor)
+                xsize = min(self.scaleFactor, size_x - xoff)
+                ysize = min(self.scaleFactor, size_y - yoff)
+                if xsize <= 0 or ysize <= 0:
+                    continue
+
+                values = result_band.ReadAsArray(
+                    xoff, yoff, xsize, ysize
+                ).astype(np.float64, copy=False)
+                values[values == NODATA_OUT] = np.nan
+                if not np.any(np.isfinite(values)):
+                    continue
+
+                if self.disaggregatingTemperature:
+                    aggregated = np.nanmean(values ** 4)
+                    residual_lr[i, j] = low_data[i, j] ** 4 - aggregated
+                else:
+                    residual_lr[i, j] = low_data[i, j] - np.nanmean(values)
+
+            return np.asarray(utils.binomialSmoother(residual_lr), dtype=np.float32)
+        finally:
+            scene_lr = None
+            mask_lr = None
+            result_ds = None
+
+    def _warpResidualLRToHR(self, residual_lr, hr_template, output_path):
+        """Warp an LR residual array to an on-disk HR raster."""
+        scene_lr = self._open_raster(self.lowResFile, "low-resolution image")
+        try:
+            mem_driver = gdal.GetDriverByName("MEM")
+            mem = mem_driver.Create(
+                "", residual_lr.shape[1], residual_lr.shape[0], 1, gdal.GDT_Float32
+            )
+            mem.SetGeoTransform(scene_lr.GetGeoTransform())
+            mem.SetProjection(scene_lr.GetProjection())
+            mem_band = mem.GetRasterBand(1)
+            mem_band.SetNoDataValue(NODATA_OUT)
+            mem_band.WriteArray(np.nan_to_num(residual_lr, nan=NODATA_OUT))
+
+            gt = hr_template.GetGeoTransform()
+            minx = gt[0]
+            maxy = gt[3]
+            maxx = minx + gt[1] * hr_template.RasterXSize
+            miny = maxy + gt[5] * hr_template.RasterYSize
+
+            warped = gdal.Warp(
+                str(output_path),
+                mem,
+                format="GTiff",
+                dstSRS=hr_template.GetProjection(),
+                xRes=abs(gt[1]),
+                yRes=abs(gt[5]),
+                outputBounds=(minx, miny, maxx, maxy),
+                resampleAlg="bilinear",
+                srcNodata=NODATA_OUT,
+                dstNodata=NODATA_OUT,
+                creationOptions=[
+                    "TILED=YES",
+                    "COMPRESS=DEFLATE",
+                    "PREDICTOR=3",
+                    "BIGTIFF=IF_SAFER",
+                ],
+            )
+            if warped is None:
+                raise RuntimeError(f"GDAL residual upsampling failed: {output_path}")
+            warped.FlushCache()
+            warped = None
+            mem = None
+        finally:
+            scene_lr = None
 
     def _calculateResidual(self, result):
         if utils is None:

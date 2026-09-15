@@ -7,12 +7,6 @@ from pystac_client import Client
 from urllib.parse import urlparse
 import urllib3
 
-from dotenv import load_dotenv
-
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-load_dotenv(PROJECT_ROOT / ".env.example")
-
-
 CDSE_STAC_URL = "https://stac.dataspace.copernicus.eu/v1"
 S3_COLLECTION = "sentinel-3-sl-2-lst-ntc"
 

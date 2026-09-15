@@ -27,12 +27,12 @@ class Sentinel2Downloader:
     """Search for Sentinel-2 scenes and download HTTP or S3 assets."""
 
     def __init__(self, username: str | None = None, password: str | None = None) -> None:
-        self.username = username or os.getenv("CDSE_CLIENT_ID")
-        self.password = password or os.getenv("CDSE_CLIENT_SECRET")
+        self.username = username or os.getenv("CDSE_USERNAME")
+        self.password = password or os.getenv("CDSE_PASSWORD")
 
         if not self.username or not self.password:
             raise RuntimeError(
-                "Missing CDSE credentials. Set CDSE_CLIENT_ID and CDSE_CLIENT_SECRET."
+                "Missing CDSE credentials. Set CDSE_USERNAME and CDSE_PASSWORD."
             )
 
         self.catalog = Client.open(CDSE_STAC_URL)

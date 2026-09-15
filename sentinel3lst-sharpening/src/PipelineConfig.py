@@ -7,10 +7,12 @@ import sys
 import time
 import logging
 import hashlib
+import shutil
 
-import rasterio
 import numpy as np
 from tqdm import tqdm
+
+from dotenv import load_dotenv
 
 from thermal_sharpening.download.iccs import find_ICCS_S3TS
 from thermal_sharpening.download.sentinel2 import Sentinel2Downloader
@@ -21,6 +23,7 @@ from thermal_sharpening.download.models import Scene
 import thermal_sharpening.preprocessing.sentinel2 as sentinel2_processor
 import thermal_sharpening.preprocessing.sentinel3 as sentinel3_processor
 import thermal_sharpening.tsharpening as thermal_sharpening
+import s3_upload
 
 logger = logging.getLogger()
 
@@ -37,37 +40,41 @@ class PipelineConfig:
 
     def __init__(self, config):
 
+        PROJECT_ROOT = Path(__file__).resolve().parents[1]
+        load_dotenv(PROJECT_ROOT / ".env")
+
         # ---------------------------------------------------------
         # Data repository configuration
         # ---------------------------------------------------------
 
-        self.sen3_data_root = Path("data/sentinel3/sentinel-3-sl-2-lst-ntc")
-        self.sen2_data_root =  Path("data/sentinel2/sentinel-2-l2a")
-        self.sen2sr_data_root =  Path("data/sentinel2/sentinel-2-l2a-sr-10m")
-        self.temp_directory = Path("data/tmp")
+        self.data_directory = Path("data")
+        self.sen3_data_root = self.data_directory / "sentinel3" / "sentinel-3-sl-2-lst-ntc"
+        self.sen2_data_root = self.data_directory / "sentinel2" / "sentinel-2-l2a"
+        self.sen2sr_data_root = self.data_directory / "sentinel2" / "sentinel-2-l2a-sr-10m"
+        self.temp_directory = self.data_directory / "tmp"
 
         # ---------------------------------------------------------
         # Image search configuration
         # ---------------------------------------------------------
-        self.image_search_provider = "sentinel"
 
         self.max_cloud_cover = 10
-
-        self.max_results = 3
-
         self.overlap_percentage = 80
-
-        # ---------------------------------------------------------
-        # Processing configuration
-        # ---------------------------------------------------------
-        self.crop_to_aoi = True
 
         # ---------------------------------------------------------
         # Output configuration
         # ---------------------------------------------------------
         self.output_directory = "outputs"
+        self.cleanup_data_tmp = False
 
-        self.output_format = "geotiff"
+        #----------------------------------------------------------
+        # S3 storage configuration
+        self.save_to_s3 = True
+        self.s3_visibility = "public"
+        self.s3_data_directory = "sentinel-3-lst-ntc-ts-10m" 
+
+        # S3 credentials
+        #CLIENT_ID = os.environ["ICCS_ACCESS_KEY_ID"]
+        #CLIENT_SECRET = os.environ["ICCS_SECRET_ACCESS_KEY"]
 
     # =============================================================
     # PIPELINE FUNCTIONS
@@ -153,7 +160,7 @@ class PipelineConfig:
             sen3_search_results = downloader.search(
                 sen2sr_scene.footprint,
                 datetime=s2_datetime,
-                query={"eo:cloud_cover": {"lt": 10}},
+                query={"eo:cloud_cover": {"lt": self.max_cloud_cover}},
             )
 
             for item in sen3_search_results:
@@ -484,6 +491,28 @@ class PipelineConfig:
 
         return corrected_result
 
+    def housekeeping(self) -> None:
+        """Remove the entire data and tmp directory."""
+        if not self.data_directory.exists():
+            logger.info("No data directory to clean up.")
+            return
+
+        logger.info(
+            "Cleaning data directory: %s",
+            self.data_directory,
+        )
+
+        try:
+            shutil.rmtree(self.data_directory)
+        except OSError as exc:
+            logger.warning(
+                "Could not completely remove data directory %s: %s",
+                self.data_directory,
+                exc,
+            )
+        else:
+            logger.info("Data directory removed successfully.")
+
 
     # =============================================================
     # MAIN PIPELINE
@@ -565,7 +594,7 @@ class PipelineConfig:
         # 5. Download Sentinel-2 SR from ICCS S3 Storage
         image_paths = self.download_images(best_by_scene)
 
-
+        outputs = []
         # 6. Data Preprocessing
         for i, (sen2sr_scene, sen3_scene, s2_mask20m) in enumerate(image_paths):
             lowResFilename = self.unzip_sentinel3(sen3_scene)
@@ -580,7 +609,81 @@ class PipelineConfig:
             logger.info('Starting Thermal Sharperning ...')
             output = self.thermal_sharpening(sen2sr_scene, lowResFilename_reprojected, s2_mask10m, s3_mask)
 
-            print(output)
+            outputs.append(output)
+
+        if self.cleanup_data_tmp:
+            self.housekeeping()
+
+
+        # 7. Create Output Thumbnails
+        '''
+        def create_thumbnail(feature_id: str):
+            from eo_library.thumbnails import create_thumbnail
+
+            tiff_path = f"/mnt/workdir/outputs/SR_{feature_id}.tiff"
+            output_path = f"/mnt/workdir/outputs/SR_{feature_id}-ql.jpg"
+
+            thumbnail_size = (343, 343)
+            create_thumbnail(tiff_path, output_path, thumbnail_size)
+
+        '''
+
+        # 8. Save output and thumbnails to ICCS S3 - keep s3 links (output and thumbnails) for stac indexing
+        if self.save_to_s3:
+
+            s3_client = s3_upload.create_s3_client(
+                 os.environ['S3_CLIENT_ID'],
+                 os.environ['S3_CLIENT_SECRET'],
+            )
+            logger.info(f'Saving Thermal Sharperning outputs to S3 bucket s3://{self.s3_visibility}/{self.s3_data_directory}')
+
+            for output_filepath in outputs:
+                output_filename = Path(output_filepath).name
+
+                '''
+                s3_upload.upload_if_not_exists_safe(
+                    s3_client,
+                    output_filepath,
+                    self.s3_visibility,
+                    os.path.join(self.s3_data_directory, output_filename)
+                )
+                '''
+
+        # 9. Check if STAC Collection exists, else create it.
+
+
+        # 10. 
+        '''
+        def update_catalogue(feature_id: str):
+            from eo_library.stac_models import create_s2l2sr_stac_item
+            from eo_library.auth_utils import get_auth_header_client_credentials
+            from pystac import Item
+            import json
+            import httpx
+
+            with open(f"/mnt/workdir/features/{feature_id}.json", "r") as f:
+                item: Item = Item.from_dict(json.loads(f.read()))
+
+            created = create_s2l2sr_stac_item(item).to_dict()
+            auth_header = get_auth_header_client_credentials(
+                client_id=os.environ["CLIENT_ID"],
+                client_secret=os.environ["CLIENT_SECRET"],
+                token_endpoint="https://auth-eo.iccs.gr/realms/eo-platform/protocol/openid-connect/token",
+            )
+
+            with httpx.Client(headers=auth_header) as client:
+                response = client.put(
+                    url=f"https://platform-eo.iccs.gr/stac/collections/sentinel-2-l2a-sr-10m/items/{created['id']}",
+                    json=created,
+                )
+                response.raise_for_status()
+        '''
+
+
+        logger.info("Pipeline finished successfully")
+
+        return outputs
+        
             
 
             

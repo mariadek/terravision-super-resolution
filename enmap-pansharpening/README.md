@@ -76,12 +76,75 @@ Clone via:
       pip install -r requirements.txt
 ```
 
+## Authentication
+
+The workflow downloads data from the Copernicus Data Space Ecosystem (CDSE) and the DLR EOC GeoService. Both services require authentication.
+
+Credentials should be provided through environment variables and should not be stored directly in the source code or committed to Git.
+
+1. Copernicus Data Space Ecosystem (CDSE)
+
+Create a free CDSE account:
+
+   1. Go to the [Copernicus Data Space Ecosystem](https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/auth?client_id=account-console&redirect_uri=https%3A%2F%2Fidentity.dataspace.copernicus.eu%2Fauth%2Frealms%2FCDSE%2Faccount%2F%23%2Fpersonal-info&state=cea959f4-c939-4f39-bce0-a8757d65d783&response_mode=query&response_type=code&scope=openid&nonce=dc375623-e3cc-4a9a-9f98-40062ef5a9a7&code_challenge=Mm9RCZVAMuUcSbIxg74tyrOXFhJoQ9VC6VEN7EEtP_I&code_challenge_method=S256).
+   2. Click Register and create an account.
+   3. Verify your email address using the verification email sent by CDSE.
+   4. Use the email/username and password associated with your account as your CDSE credentials.
+
+For additional information, see the official CDSE registration documentation.
+
+2. DLR EOC GeoService
+
+Access to the required DLR products also requires a registered account.
+
+   1. Open the appropriate [DLR EOC GeoService registration page](https://sso.eoc.dlr.de/geoservice/selfservice/public/newuser?locale=en).
+   2. Complete the registration form using a valid email address.
+   3. Follow the verification link/instructions sent by email.
+   4. Accept the applicable data protection and license conditions.
+   5. Use the resulting username and password as your DLR credentials.
+
+See the DLR EOC GeoService Data Guide for additional information.
+
+3. Configure environment variables
+
+Before running the workflow, define the credentials as environment variables.
+
+Using a .env file
+
+If the project supports loading a .env file, create a file named .env in the project root:
+
+CDSE_USERNAME=your_cdse_username
+CDSE_PASSWORD=your_cdse_password
+DLR_USERNAME=your_dlr_username
+DLR_PASSWORD=your_dlr_password
+
+Make sure .env is included in .gitignore:
+
+.env
+
+Important: Never commit usernames, passwords, access tokens, or other credentials to the repository.
+
+A .env.example file can be committed to show which variables are required without exposing credentials:
+
+CDSE_USERNAME=
+CDSE_PASSWORD=
+DLR_USERNAME=
+DLR_PASSWORD=
+
 ## Usage
 
 ### Python 
+Run with a custom configuration file:
+
+```bash
+      python src/main.py --user_input ./examples/La_Zarza_aoi.json --config ./configs/config.yaml
+```
+Or run without specifying a configuration file:
 ```bash
       python src/main.py --user_input ./examples/La_Zarza_aoi.json
 ```
+**Note**: The --config argument is optional.
+
 ### Docker
 ```bash
       USER_INPUT=examples/La_Zarza_aoi.json docker compose run --rm enmap_pansharp

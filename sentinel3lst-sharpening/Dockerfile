@@ -1,25 +1,35 @@
-FROM python:3.11-slim-bookworm
+FROM condaforge/miniforge3:latest
+
+RUN conda create -y -n arosics \
+        -c conda-forge \
+        python=3.11 \
+        pip \
+        cartopy \
+        gdal \
+        geopandas \
+        numpy \
+        scipy \
+        shapely \
+        pyproj \
+        rasterio \
+        scikit-image \
+        netcdf4 \
+        libgdal-jp2openjpeg \
+    && conda clean -afy
+
+ENV PATH="/opt/conda/envs/arosics/bin:$PATH"
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential \
-        gdal-bin \
-        libgdal-dev \
-        libgeos-dev \
-        libproj-dev \
-        proj-bin \
-        proj-data \
-    && rm -rf /var/lib/apt/lists/*
-
-ENV GDAL_CONFIG=/usr/bin/gdal-config
-
+# Install your Python dependencies
 COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
-    && pip install --no-cache-dir "GDAL==$(gdal-config --version)" \
-    && pip install --no-cache-dir -r requirements.txt
-
+# Copy application source
 COPY src/ ./src/
 
+WORKDIR /app
+
 CMD ["python", "src/main.py"]
+
+

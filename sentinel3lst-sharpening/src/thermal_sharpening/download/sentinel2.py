@@ -11,12 +11,6 @@ from tqdm import tqdm
 from urllib.parse import urlparse
 import urllib3
 
-from dotenv import load_dotenv
-
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-load_dotenv(PROJECT_ROOT / ".env.example")
-
-
 CDSE_STAC_URL = "https://stac.dataspace.copernicus.eu/v1"
 S2_COLLECTION = "sentinel-2-l2a"
 

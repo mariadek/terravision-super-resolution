@@ -36,7 +36,7 @@ def mask_resampling(mask, highresfile, output_dir):
     # RasterXSize - columns
     # RasterYSize - rows
     outdata = driver.Create(
-        output,
+        str(output),
         ds10.RasterXSize,
         ds10.RasterYSize,
         1,
