@@ -3,9 +3,27 @@ import rasterio
 from shapely.geometry import shape
 
 def intersection_percentage(aoi_geojson, multipolygon_geojson):
-    # Convert both geometries to shapely
+    """
+    Calculate the percentage of the AOI covered by a multipolygon.
+
+    Args:
+        aoi_geojson: AOI geometry in GeoJSON format.
+        multipolygon_geojson: Multipolygon geometry in GeoJSON format.
+
+    Returns:
+        Intersection percentage between 0 and 100.
+    """
+
     aoi_geom = shape(aoi_geojson)
     multipoly = shape(multipolygon_geojson)
+
+    # Validate AOI
+    if aoi_geom.is_empty or aoi_geom.area == 0:
+        return 0.0
+
+    # Validate multipolygon
+    if multipoly.is_empty:
+        return 0.0
 
     # Compute intersection
     intersection = aoi_geom.intersection(multipoly)
@@ -13,10 +31,9 @@ def intersection_percentage(aoi_geojson, multipolygon_geojson):
     if intersection.is_empty:
         return 0.0
 
-    intersection_area = intersection.area
-    aoi_area = aoi_geom.area
-
-    return (intersection_area / aoi_area) * 100
+    return (
+        intersection.area / aoi_geom.area
+    ) * 100.0
 
 def find_band(HS_path, target_wavelength):
 

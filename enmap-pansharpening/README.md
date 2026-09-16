@@ -130,6 +130,8 @@ CDSE_USERNAME=
 CDSE_PASSWORD=
 DLR_USERNAME=
 DLR_PASSWORD=
+ICCS_USERNAME=
+ICCS_PASSWORD=
 
 ## Usage
 
@@ -147,7 +149,7 @@ Or run without specifying a configuration file:
 
 ### Docker
 ```bash
-      USER_INPUT=examples/La_Zarza_aoi.json docker compose run --rm enmap_pansharp
+      USER_INPUT=examples/La_Zarza_aoi.json CONFIG=configs/config.yaml docker compose run --rm enmap_pansharp
 ```
 ## Outputs
 

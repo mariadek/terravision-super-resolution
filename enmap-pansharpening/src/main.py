@@ -152,6 +152,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--config",
+        type=str,
         default="configs/config.yaml",
         help=(
             "Path to the pipeline configuration file "

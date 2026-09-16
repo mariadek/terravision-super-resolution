@@ -306,8 +306,11 @@ class Sentinel2Downloader:
         destination_dir.mkdir(parents=True, exist_ok=True)
 
         assets_to_download = {}
+        downloaded_paths = {}
 
+        # 1. Validate assets and check existing files
         for asset_title in asset_titles:
+
             asset = item.assets.get(asset_title)
 
             if asset is None:
@@ -321,8 +324,21 @@ class Sentinel2Downloader:
                 )
 
             bucket_name, object_key = asset.href[5:].split("/", 1)
-            filename = Path(object_key).name
-            destination_path = destination_dir / filename
+
+            destination_path = destination_dir / Path(object_key).name
+
+            # Skip existing non-empty files
+            if (
+                destination_path.is_file()
+                and destination_path.stat().st_size > 0
+            ):
+                logger.info(
+                    "Sentinel-2 asset already exists: %s",
+                    destination_path,
+                )
+
+                downloaded_paths[asset_title] = str(destination_path)
+                continue
 
             assets_to_download[asset_title] = {
                 "bucket_name": bucket_name,
@@ -330,14 +346,28 @@ class Sentinel2Downloader:
                 "destination_path": destination_path,
             }
 
+        # 2. Nothing to download: avoid authentication
+        if not assets_to_download:
+            logger.info(
+                "All requested Sentinel-2 assets already exist for scene %s",
+                item.id,
+            )
+
+            return downloaded_paths
+
+        # 3. Authenticate only when downloads are required
         access_token = self.get_access_token()
+
         credentials = self.get_temporary_s3_credentials(access_token)
+
         access_id = credentials["access_id"]
 
         try:
+
             logger.info(
                 "Waiting for temporary S3 credentials to become active"
             )
+
             time.sleep(5)
 
             s3_resource = boto3.resource(
@@ -348,18 +378,12 @@ class Sentinel2Downloader:
                 region_name="default",
             )
 
-            downloaded_paths = {}
+            s3_client = s3_resource.meta.client
 
+            # 4. Download missing assets
             for asset_title, asset_info in assets_to_download.items():
-                destination_path = asset_info["destination_path"]
 
-                if destination_path.is_file():
-                    logger.info(
-                        "Sentinel-2 asset already exists: %s",
-                        destination_path,
-                    )
-                    downloaded_paths[asset_title] = str(destination_path)
-                    continue
+                destination_path = asset_info["destination_path"]
 
                 logger.info(
                     "Downloading Sentinel-2 asset %s for scene %s",
@@ -368,16 +392,29 @@ class Sentinel2Downloader:
                 )
 
                 try:
+
                     self._download_s3_file(
-                        s3_resource.meta.client,
+                        s3_client,
                         asset_info["bucket_name"],
                         asset_info["object_key"],
                         destination_path,
                     )
 
+                    # Verify downloaded file
+                    if (
+                        not destination_path.is_file()
+                        or destination_path.stat().st_size == 0
+                    ):
+                        raise RuntimeError(
+                            f"Downloaded file is missing or empty: "
+                            f"{destination_path}"
+                        )
+
                 except Exception as exc:
+
                     logger.exception(
-                        "Failed to download Sentinel-2 asset %s for scene %s",
+                        "Failed to download Sentinel-2 asset %s "
+                        "for scene %s",
                         asset_title,
                         item.id,
                     )
@@ -397,6 +434,12 @@ class Sentinel2Downloader:
             return downloaded_paths
 
         finally:
+
+            # 5. Always delete temporary credentials
+            logger.info(
+                "Deleting temporary S3 credentials"
+            )
+
             self.delete_temporary_s3_credentials(
                 access_token,
                 access_id,

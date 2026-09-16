@@ -7,7 +7,7 @@ input:
   sen2_data_root: "data/sentinel2/sentinel-2-l2a"
 
 search:
-  min_overlap: 80
+  min_overlap: 70
 sentinel2_search:
   max_cloud_cover: 20
   max_time_difference_hours: 1
@@ -20,11 +20,15 @@ processing:
 
 output_directory: "outputs"
 
+housekeeping:
+  cleanup_data_tmp: True
+  request_delay_seconds: 2
+
 storage:
   s3:
     enabled: false
     bucket: null
-    prefix: "enmap-pansharpened-tv"
+    prefix: "enmap-l2a-pansharpened-10m"
 
 stac:
-  collection_id: "enmap-pansharpened-tv"
+  collection_id: "enmap-l2a-pansharpened-10m"
