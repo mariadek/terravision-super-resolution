@@ -117,6 +117,8 @@ CDSE_USERNAME=your_cdse_username
 CDSE_PASSWORD=your_cdse_password
 DLR_USERNAME=your_dlr_username
 DLR_PASSWORD=your_dlr_password
+ICCS_USERNAME=your_iccs_username
+ICCS_PASSWORD=your_iccs_password
 
 Make sure .env is included in .gitignore:
 
