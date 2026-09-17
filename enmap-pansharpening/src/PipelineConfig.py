@@ -8,6 +8,7 @@ from pathlib import Path
 from datetime import timedelta
 from dataclasses import dataclass
 
+import boto3
 
 import rasterio
 import numpy as np
@@ -22,7 +23,7 @@ from enmap_pansharpening.download.enmap import EnMAPDownloader
 from enmap_pansharpening.download.sentinel2 import Sentinel2Downloader
 from enmap_pansharpening.download.models import Scene
 import enmap_pansharpening.download.iccs as iccs_stac
-from enmap_pansharpening.utils.utils import intersection_percentage, find_band, bbox_hash
+from enmap_pansharpening.utils.utils import intersection_percentage, find_band, bbox_hash, create_thumbnail
 from enmap_pansharpening.preprocessing.enmap_band_removal import EnMAP
 from enmap_pansharpening.preprocessing.sentinel2_panchromatic import Sentinel2
 from enmap_pansharpening.preprocessing.crop import get_raster_footprint, get_max_rectangle, crop_geotiff_by_bbox, polygon_to_bbox, bbox_intersection
@@ -30,8 +31,11 @@ import enmap_pansharpening.pansharpening as pansharpening
 from enmap_pansharpening.reconstruction import (
     reconstruct_single_image,
 )
+import s3_upload
+import stac_indexing
 
 logger = logging.getLogger(__name__)
+logging.getLogger("botocore.credentials").setLevel(logging.WARNING)
 
 @dataclass
 class PreprocessedPair:
@@ -58,6 +62,18 @@ class PipelineConfig:
 
         self.ICCS_STAC_URL = "https://platform-eo.iccs.gr/stac"
         self.product_collection_id = 'enmap-l2a-pansharpened-10m'
+
+        session = boto3.Session(
+            aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
+            aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
+                )
+
+
+        self.s3_client = session.client(
+            "s3",
+            endpoint_url="https://platform-eo-storage.iccs.gr",
+        )
+
 
         # ---------------------------------------------------------
         # Data repository configuration
@@ -88,10 +104,21 @@ class PipelineConfig:
         # ---------------------------------------------------------
         self.output_directory = Path(config['output_directory'])
 
-
         # Temporary processing files
         self.temp_directory = self.data_directory / "tmp"
         self.cleanup_data_tmp = config['housekeeping']['cleanup_data_tmp']
+
+        # Thumbnail settings
+        self.thumbnail_size = tuple(config["thumbnail_size"])
+
+        # S3 upload settings
+        self.s3_upload = config['storage']['s3']['enabled']
+        self.s3_bucket = config['storage']['s3']['bucket']
+        self.s3_collection_dir = config['storage']['s3']['prefix']
+
+        # STAC settings
+        self.stac_indexing_enabled = config['stac']['enabled']
+        self.stac_collection_id = config['stac']['collection_id']
 
     # =============================================================
     # PIPELINE FUNCTIONS
@@ -163,7 +190,7 @@ class PipelineConfig:
         Return scene objects that have not already been processed.
         """
 
-        pattern = r"-SPECTRAL_IMAGE_COREGISTERED_CROPPED_[a-f0-9]+_PANSHARPENED$"
+        pattern = r"^PANSHARP_|_[a-f0-9]+\.TIF$"
 
         # Normalize IDs of already processed scenes
         existing_ids = {
@@ -821,9 +848,11 @@ class PipelineConfig:
         # 6. Generate EnMAP output path
         enmap_cropped_path = (
             enmap_image.parent
-            / enmap_image.name.replace(
-                "COREGISTERED_CROPPED_ortho.TIF",
-                f"COREGISTERED_CROPPED_ORTHO_CROPPED_{h}.TIF"
+            / (
+                enmap_image.name.replace(
+                    "COREGISTERED_CROPPED_ortho.TIF",
+                    f"{h}.TIF"
+                )
             )
         )
 
@@ -898,7 +927,7 @@ class PipelineConfig:
         logger.info("Starting pipeline - TERRAVISION EnMAP Pansharpening")
         outputs = []
 
-        # 0. Search ICCS STAC - Check if there is the relevant collection and if not stop the workflow
+        # 1. Search ICCS STAC - Check if there is the relevant collection and if not stop the workflow
 
         username = os.environ["ICCS_USERNAME"]
         password = os.environ["ICCS_PASSWORD"]
@@ -911,19 +940,18 @@ class PipelineConfig:
             logger.info("Need to create the STAC collection '%s' at %s", self.product_collection_id,  self.ICCS_STAC_URL,)
             return
        
-        # Search in ICCS STAC to find the enmap scenes that have been already processed
+        # 2. Search in ICCS STAC to find the enmap scenes that have been already processed
         enmap_processed = iccs_stac.search_ICCS_collection(aoi, datetime, "enmap-l2a-pansharpened-10m", iccs_auth)
         if enmap_processed is not None:
             logger.info(f"{len(enmap_processed)} EnMAP products have already been processed.")
 
-        # 1. Search EnMAP scenes using the runtime AOI and optional datetime.
+        # 3. Search EnMAP scenes using the runtime AOI and optional datetime.
         enmap_scenes = self.search_enmap_images(aoi, datetime=datetime)
         if len(enmap_scenes) == 0:
             logger.info(f"No EnMAP scenes found. Pipeline stopped.")
             return
        
-
-        # Remove from enmap_scenes the scenes already processed
+        # 4. Remove from enmap_scenes the scenes already processed
         enmap_scenes_to_process = (
             self.filter_out_existing_scenes(enmap_scenes, enmap_processed)
             if enmap_processed
@@ -932,7 +960,8 @@ class PipelineConfig:
 
         logger.info(f"{len(enmap_scenes_to_process)} EnMAP scenes will be processed")
 
-        # 2. Search temporally matching Sentinel-2 scenes.
+
+        # 5. Search temporally matching Sentinel-2 scenes.
         sentinel2_scenes = self.search_sentinel2_images(enmap_scenes_to_process, aoi)
 
         # Loop over each EnMAP scene to download and process the data, deleting temporary files after each iteration.
@@ -948,7 +977,7 @@ class PipelineConfig:
         for enmap_scene in enmap_scenes_to_process:
 
             try:
-                # 3. Download the EnMAP and Sentinel-2 pair
+                # 6. Download the EnMAP and Sentinel-2 pair
                 download_path = self.download_images(
                     enmap_scene,
                     sentinel2_scenes,
@@ -959,20 +988,20 @@ class PipelineConfig:
                 if not download_path:
                     continue
 
-                # 4. Preprocess source imagery
+                # 7. Preprocess source imagery
                 enmap_path, sen2_path = download_path
                 processed = self.preprocess_pairs(enmap_path, sen2_path)
 
-                # 5. Coregister EnMAP to Sentinel-2
+                # 8. Coregister EnMAP to Sentinel-2
                 coregistered = self.coregistration(processed)
 
-                # 6. Crop both datasets to their common valid extent
+                # 9. Crop both datasets to their common valid extent
                 cropped, bbox = self.crop(coregistered)
 
-                # 7. First pansharpening stage
+                # 10. First pansharpening stage
                 intermediate, parameters = self.pansharpen(cropped)
 
-                # 8. Crop to AOI
+                # 11. Crop to AOI
                 if self.crop_to_aoi:
 
                     cropped = self.crop_aoi(
@@ -992,7 +1021,7 @@ class PipelineConfig:
 
                 hs_ortho_file, pan_adjusted_file = intermediate
 
-                # 9. Final pansharpening/reconstruction stage
+                # 12. Final pansharpening/reconstruction stage
                 output = reconstruct_single_image(
                     hs_ortho_file,
                     pan_adjusted_file,
@@ -1020,8 +1049,20 @@ class PipelineConfig:
 
                 outputs.append(str(output_path))
 
-                # 10. TODO: Create STAC metadata for final products.
-                # 11. TODO: Upload final products to ICCS S3.
+                # 13. Create thumbnails
+                output_ql = create_thumbnail(output_path, self.thumbnail_size)
+
+                # 14. Upload final products and thumbnails to ICCS S3.
+                if self.s3_upload:
+                    s3_upload.put_output_to_s3(output_path, self.s3_bucket, self.s3_collection_dir, self.s3_client)
+                    s3_upload.put_output_to_s3(output_ql, self.s3_bucket, self.s3_collection_dir, self.s3_client)
+
+                # 15. TODO: Create STAC metadata for final products.
+                #file_footprint = stac_indexing.get_bbox_and_footprint(output_path)
+            
+
+                # 16. TODO: Post item at collection
+
 
                 logger.info(
                     "Successfully processed EnMAP scene: %s",

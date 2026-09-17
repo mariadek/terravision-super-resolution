@@ -21,14 +21,17 @@ processing:
 output_directory: "outputs"
 
 housekeeping:
-  cleanup_data_tmp: True
+  cleanup_data_tmp: False
   request_delay_seconds: 2
+
+thumbnail_size: [343, 343]
 
 storage:
   s3:
-    enabled: false
-    bucket: null
+    enabled: False
+    bucket: "private-terravision"
     prefix: "enmap-l2a-pansharpened-10m"
 
 stac:
+  enabled: False
   collection_id: "enmap-l2a-pansharpened-10m"

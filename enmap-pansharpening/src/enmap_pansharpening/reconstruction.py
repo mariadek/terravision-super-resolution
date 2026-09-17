@@ -70,7 +70,7 @@ def create_output_path(
         .replace("_COG", "")
     )
 
-    return output_dir / f"{stem}_PANSHARPENED.TIF"
+    return output_dir / f"PANSHARP_{stem}.TIF"
 
 
 def write_spectral_metadata(
