@@ -1,5 +1,6 @@
 import os
 import re
+import subprocess
 import numpy as np
 from typing import Tuple
 from PIL import Image
@@ -157,3 +158,45 @@ def create_thumbnail(
     thumbnail.save(output_path)
 
     return Path(output_path)
+
+def convert_to_cog(geotiff_path, bigtiff=False):
+    """
+    Convert a GeoTIFF to a Cloud Optimized GeoTIFF (COG).
+
+    Parameters
+    ----------
+    geotiff_path : str
+        Path to the input GeoTIFF.
+    bigtiff : bool
+        Whether to use optimized settings for large TIFF files.
+    """
+
+    # Generate output path
+    base, _ = os.path.splitext(geotiff_path)
+    cog_filename = f"{base}_COG.TIF"
+
+    cmd = [
+        "gdal_translate",
+        str(geotiff_path),
+        str(cog_filename),
+        "-of", "COG",
+    ]
+
+    if bigtiff:
+        print("BIGTIFF processing")
+
+        cmd.extend([
+            "-co", "COMPRESS=NONE",
+            "-co", "NUM_THREADS=ALL_CPUS",
+            "-co", "BLOCKSIZE=512",
+            "-co", "OVERVIEWS=IGNORE_EXISTING",
+            "-co", "BIGTIFF=YES",
+        ])
+    else:
+        cmd.extend([
+            "-co", "COMPRESS=LZW",
+        ])
+
+    subprocess.run(cmd, check=True)
+
+    return cog_filename

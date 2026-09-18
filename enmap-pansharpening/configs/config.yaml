@@ -23,6 +23,7 @@ pansharpening:
   padding_size: 16
   
 output_directory: "outputs"
+output_COG: True
 
 cleanup_data_tmp: True
 request_delay_seconds: 2

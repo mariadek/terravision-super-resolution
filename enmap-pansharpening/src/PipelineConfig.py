@@ -23,7 +23,7 @@ from enmap_pansharpening.download.enmap import EnMAPDownloader
 from enmap_pansharpening.download.sentinel2 import Sentinel2Downloader
 from enmap_pansharpening.download.models import Scene
 import enmap_pansharpening.download.iccs as iccs_stac
-from enmap_pansharpening.utils.utils import intersection_percentage, find_band, bbox_hash, create_thumbnail
+from enmap_pansharpening.utils.utils import intersection_percentage, find_band, bbox_hash, create_thumbnail, convert_to_cog
 from enmap_pansharpening.preprocessing.enmap_band_removal import EnMAP
 from enmap_pansharpening.preprocessing.sentinel2_panchromatic import Sentinel2
 from enmap_pansharpening.preprocessing.crop import get_raster_footprint, get_max_rectangle, crop_geotiff_by_bbox, polygon_to_bbox, bbox_intersection
@@ -104,6 +104,7 @@ class PipelineConfig:
         # Output configuration
         # ---------------------------------------------------------
         self.output_directory = Path(config['output_directory'])
+        self.output_cog = config['output_COG']
 
         # Temporary processing files
         self.temp_directory = self.data_directory / "tmp"
@@ -1049,21 +1050,27 @@ class PipelineConfig:
                         f"Reconstructed product is empty: {output_path}"
                     )
 
-                outputs.append(str(output_path))
 
                 # 13. Create thumbnails
                 output_ql = create_thumbnail(output_path, self.thumbnail_size)
 
-                # 14. Upload final products and thumbnails to ICCS S3.
+                # 14. Create COG
+                if self.output_cog:
+                    logger.info("Converting to COG ...")
+                    output = convert_to_cog(output_path)
+
+                outputs.append(str(output_path))
+
+                # 15. Upload final products and thumbnails to ICCS S3.
                 if self.s3_upload:
                     s3_upload.put_output_to_s3(output_path, self.s3_bucket, self.s3_collection_dir, self.s3_client)
                     s3_upload.put_output_to_s3(output_ql, self.s3_bucket, self.s3_collection_dir, self.s3_client)
 
-                # 15. TODO: Create STAC metadata for final products.
+                # 16. TODO: Create STAC metadata for final products.
                 #file_footprint = stac_indexing.get_bbox_and_footprint(output_path)
             
 
-                # 16. TODO: Post item at collection
+                # 17. TODO: Post item at collection
 
 
                 logger.info(
