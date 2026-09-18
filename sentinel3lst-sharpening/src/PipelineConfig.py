@@ -9,16 +9,18 @@ import logging
 import hashlib
 import shutil
 
+import boto3
+
 import numpy as np
 from tqdm import tqdm
 
 from dotenv import load_dotenv
 
-from thermal_sharpening.download.iccs import find_ICCS_S3TS
+import thermal_sharpening.download.iccs as iccs_stac
 from thermal_sharpening.download.sentinel2 import Sentinel2Downloader
 from thermal_sharpening.download.sentinel3 import Sentinel3Downloader
 from thermal_sharpening.download.sentinel2SR_ICCS import ICCSSentinel2Downloader
-from thermal_sharpening.utils.utils import intersection_percentage, mask_resampling
+from thermal_sharpening.utils.utils import intersection_percentage, mask_resampling, create_lst_thumbnail
 from thermal_sharpening.download.models import Scene
 import thermal_sharpening.preprocessing.sentinel2 as sentinel2_processor
 import thermal_sharpening.preprocessing.sentinel3 as sentinel3_processor
@@ -26,6 +28,8 @@ import thermal_sharpening.tsharpening as thermal_sharpening
 import s3_upload
 
 logger = logging.getLogger()
+logging.getLogger("botocore.credentials").setLevel(logging.WARNING)
+
 
 def bbox_hash(bbox, length=10):
     bbox = f"{bbox[0]:.6f},{bbox[1]:.6f},{bbox[2]:.6f},{bbox[3]:.6f}"
@@ -43,6 +47,20 @@ class PipelineConfig:
         PROJECT_ROOT = Path(__file__).resolve().parents[1]
         load_dotenv(PROJECT_ROOT / ".env")
 
+        self.ICCS_STAC_URL = "https://platform-eo.iccs.gr/stac"
+
+        session = boto3.Session(
+            aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
+            aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
+                )
+
+
+        self.s3_client = session.client(
+            "s3",
+            endpoint_url="https://platform-eo-storage.iccs.gr",
+        )
+        
+
         # ---------------------------------------------------------
         # Data repository configuration
         # ---------------------------------------------------------
@@ -57,24 +75,29 @@ class PipelineConfig:
         # Image search configuration
         # ---------------------------------------------------------
 
-        self.max_cloud_cover = 10
-        self.overlap_percentage = 80
+        self.max_cloud_cover = config['search']['max_cloud_cover']
+        self.overlap_percentage = config['search']['min_overlap']
+        self.max_time_difference = config['search']['max_time_difference_hours']
 
         # ---------------------------------------------------------
         # Output configuration
         # ---------------------------------------------------------
-        self.output_directory = "outputs"
-        self.cleanup_data_tmp = False
+        self.output_directory = config['output']['directory']
+        self.cleanup_data_tmp = config['cleanup_data_tmp']
+
+        # Thumbnail settings
+        self.thumbnail_size = tuple(config["thumbnail_size"])
 
         #----------------------------------------------------------
         # S3 storage configuration
-        self.save_to_s3 = True
-        self.s3_visibility = "public"
-        self.s3_data_directory = "sentinel-3-lst-ntc-ts-10m" 
+        self.s3_upload = config['storage']['s3']['enabled']
+        self.s3_bucket = config['storage']['s3']['bucket']
+        self.s3_collection_dir = config['storage']['s3']['prefix']
+        self.product_collection_id = self.s3_collection_dir
 
-        # S3 credentials
-        #CLIENT_ID = os.environ["ICCS_ACCESS_KEY_ID"]
-        #CLIENT_SECRET = os.environ["ICCS_SECRET_ACCESS_KEY"]
+        # STAC configuration
+        self.stac_indexing_enabled = config['stac']['enabled']
+        self.product_collection_id = config['stac']['collection_id']
 
     # =============================================================
     # PIPELINE FUNCTIONS
@@ -149,8 +172,8 @@ class PipelineConfig:
         for sen2sr_scene in sen2sr_scenes:
             dt = sen2sr_scene.acquisition_datetime
 
-            start = dt - timedelta(hours=1)
-            end = dt + timedelta(hours=1)
+            start = dt - timedelta(hours=self.max_time_difference)
+            end = dt + timedelta(hours=self.max_time_difference)
 
             s2_datetime = (
                 f"{start.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-4]}/"
@@ -280,22 +303,48 @@ class PipelineConfig:
 
         return best_by_scene
 
+    def get_best_by_scene(self, sen2sr_scenes, sen3_scenes):
+        """Select the Sentinel-3 scene with the smallest time difference per scene ID."""
+
+        best_by_scene_dict = {}
+
+        # Lookup original Sentinel-2 scenes by scene_id
+        sen2_lookup = {
+            scene.scene_id: scene
+            for scene in sen2sr_scenes
+        }
+
+        for key, sen3_scene in sen3_scenes.items():
+            scene_id = sen3_scene.scene_id
+
+            if (
+                scene_id not in best_by_scene_dict
+                or sen3_scene.time_difference_minutes
+                < best_by_scene_dict[scene_id]["sen3_scene"].time_difference_minutes
+            ):
+                best_by_scene_dict[scene_id] = {
+                    "key": key,
+                    "sen2_scene": sen2_lookup.get(key),
+                    "sen3_scene": sen3_scene,
+                }
+
+        return list(best_by_scene_dict.values())
+
     
-    def download_images(self, best_by_scene: list):
+    def download_images(self, scene_pair: dict, iccs_downloader, sentinel2_downloader, sentinel3_downloader):
         """
         Download the selected Sentinel-2 SR, Sentinel-3,
         and Sentinel-2 cloud-mask scenes.
 
         Args:
-            best_by_scene: List of dictionaries containing:
-                - key: Sentinel-2 SR scene ID
+            scene_pair: Dictionary containing:
                 - sen2_scene: Sentinel-2 SR Scene
                 - sen3_scene: matched Sentinel-3 Scene
                 - s2_cloud: Sentinel-2 cloud-mask Scene
 
         Returns:
             List containing paths to the downloaded image triplets:
-            [
+            
                 [sen2_sr_path, sen3_path, sen2_cloud_path],
                 ...
             ]
@@ -305,98 +354,78 @@ class PipelineConfig:
             "Start Downloading Sentinel-3 and Matching Sentinel-2 scenes..."
         )
 
-        iccs_downloader = ICCSSentinel2Downloader()
-        sentinel2_downloader = Sentinel2Downloader()
-        sentinel3_downloader = Sentinel3Downloader()
-
-        logger.info("ICCS Username: %s", iccs_downloader.username)
-        logger.info(
-            "ICCS Password loaded: %s",
-            bool(iccs_downloader.password),
-        )
-
-        logger.info("CDSE Username: %s", sentinel3_downloader.username)
-        logger.info(
-            "CDSE Password loaded: %s",
-            bool(sentinel3_downloader.password),
-        )
-
         image_pair_paths = []
 
-        for record in best_by_scene:
+        sen2_scene = scene_pair.get("sen2_scene")
+        sen3_scene = scene_pair.get("sen3_scene")
+        sen2_cloud = scene_pair.get("s2_cloud")
 
-            sen2_scene = record.get("sen2_scene")
-            sen3_scene = record.get("sen3_scene")
-            sen2_cloud = record.get("s2_cloud")
+        # Check Sentinel-2 SR
+        if sen2_scene is None:
+            logger.warning(
+                "No Sentinel-2 SR scene for %s",
+                record.get("key"),
+            )
+            return image_pair_paths
 
-            # Check Sentinel-2 SR
-            if sen2_scene is None:
-                logger.warning(
-                    "No Sentinel-2 SR scene for %s",
-                    record.get("key"),
-                )
-                continue
-
-            # Check Sentinel-3
-            if sen3_scene is None:
-                logger.warning(
-                    "No Sentinel-3 scene for %s",
-                    sen2_scene.scene_id,
-                )
-                continue
-
-            # Check Sentinel-2 cloud mask
-            if sen2_cloud is None:
-                logger.warning(
-                    "No Sentinel-2 cloud mask for %s",
-                    sen2_scene.scene_id,
-                )
-                continue
-
-            logger.info(
-                "Sentinel-2 SR scene %s -> "
-                "Sentinel-3 scene %s "
-                "(time difference: %.2f minutes)",
+        # Check Sentinel-3
+        if sen3_scene is None:
+            logger.warning(
+                "No Sentinel-3 scene for %s",
                 sen2_scene.scene_id,
-                sen3_scene.scene_id,
-                sen3_scene.time_difference_minutes,
             )
+            return image_pair_paths
 
-            # -----------------------------------------
-            # Sentinel-2 SR Download - ICCS
-            # -----------------------------------------
-            sen2sr_download_path = iccs_downloader.download_item(
-                sen2_scene,
-                download_root=self.sen2sr_data_root,
+        # Check Sentinel-2 cloud mask
+        if sen2_cloud is None:
+            logger.warning(
+                "No Sentinel-2 cloud mask for %s",
+                sen2_scene.scene_id,
             )
+            return image_pair_paths
 
-            # -----------------------------------------
-            # Sentinel-3 Download - CDSE
-            # -----------------------------------------
-            sen3_download_path = sentinel3_downloader.download_item(
-                sen3_scene.item,
-                download_root=self.sen3_data_root,
+        logger.info(
+            "Sentinel-2 SR scene %s -> "
+            "Sentinel-3 scene %s "
+            "(time difference: %.2f minutes)",
+            sen2_scene.scene_id,
+            sen3_scene.scene_id,
+            sen3_scene.time_difference_minutes,
+        )
+
+        # -----------------------------------------
+        # Sentinel-2 SR Download - ICCS
+        # -----------------------------------------
+        sen2sr_download_path = iccs_downloader.download_item(
+            sen2_scene,
+            download_root=self.sen2sr_data_root,
+        )
+
+        # -----------------------------------------
+        # Sentinel-3 Download - CDSE
+        # -----------------------------------------
+        sen3_download_path = sentinel3_downloader.download_item(
+            sen3_scene.item,
+            download_root=self.sen3_data_root,
+        )
+
+        # -----------------------------------------
+        # Sentinel-2 Cloud Mask - CDSE
+        # -----------------------------------------
+        sen2cloud_download_path = (
+            sentinel2_downloader.download_s3_asset(
+                sen2_cloud.item,
+                "SCL_20m",
+                download_root=self.sen2_data_root,
             )
+        )
 
-            # -----------------------------------------
-            # Sentinel-2 Cloud Mask - CDSE
-            # -----------------------------------------
-            sen2cloud_download_path = (
-                sentinel2_downloader.download_s3_asset(
-                    sen2_cloud.item,
-                    "SCL_20m",
-                    download_root=self.sen2_data_root,
-                )
-            )
-
-            image_pair_paths.append(
-                [
-                    sen2sr_download_path,
-                    sen3_download_path,
-                    sen2cloud_download_path,
-                ]
-            )
-
+        image_pair_paths = [
+            sen2sr_download_path,
+            sen3_download_path,
+            sen2cloud_download_path,
+            ]
+        
         return image_pair_paths
     
     def unzip_sentinel3(self, inputs3):
@@ -535,157 +564,160 @@ class PipelineConfig:
         """
 
         logger.info("Starting pipeline - Terravision Sentinel-3 SLSTR Thermal Sharpening")
+        outputs = []
 
-        # 1. Check if Sentinel-3 SLSTR scenes have been already sharpened - ICCS STAC
-        sentinel3_ts_items = find_ICCS_S3TS(aoi, datetime)
-
-        '''
-        if sentinel3_ts_items:
-            logger.info(
-                "TS product already exists. Stopping execution."
-            )
+        # 1. Search ICCS STAC - Check if there is the relevant collection and if not stop the workflow
+        username = os.environ["ICCS_USERNAME"]
+        password = os.environ["ICCS_PASSWORD"]
+        iccs_auth = iccs_stac.KeycloakAuth(username, password)
+        logger.info("Checking ICCS STAC for collection '%s' at %s", self.product_collection_id, self.ICCS_STAC_URL,)
+        collection_exists = iccs_stac.collection_exists(self.ICCS_STAC_URL, self.product_collection_id, iccs_auth,)
+        logger.info("ICCS STAC collection '%s' exists: %s", self.product_collection_id, collection_exists,)
+        if not collection_exists:
+            logger.info("Need to create the STAC collection '%s' at %s", self.product_collection_id,  self.ICCS_STAC_URL,)
             return
-        '''
-
-
-        # 2. Search Sentinel-2 SR images from ICCS STAC using the user defined aoi and datetime
-        sen2sr_scenes = self.search_iccssen2sr_images(aoi, datetime)
         
+
+        # 2. Search in ICCS STAC to find the enmap scenes that have been already processed
+        sen3_processed = iccs_stac.search_ICCS_collection(aoi, datetime, self.product_collection_id, iccs_auth)
+        if sen3_processed is not None:
+            logger.info(f"{len(sen3_processed)} Sentinel-3 LST products have already been processed.")
+
+        # 3. Search Sentinel-2 SR images from ICCS STAC using the user defined aoi and datetime
+        sen2sr_scenes = self.search_iccssen2sr_images(aoi, datetime)
         if not sen2sr_scenes:
             logger.warning("No SR Sentinel-2 images found for this aoi and datetime. You have to execute the Sentinel-2 SR workflow first.")
             return None
 
-        
         # 3. Search Sentinel-3 SLSTR images using retrieved Sentinel-2 SR image footprints and acquisition datetime
         sen3_scenes = self.search_sentinel3_images(sen2sr_scenes, aoi)
-        
         if not sen3_scenes:
             logger.warning("No Sentinel-3 images found for the retrieved EnMAP images")
             return None
 
-        best_by_scene_dict = {}
+        best_sen3_scenes = self.get_best_by_scene(sen2sr_scenes, sen3_scenes)
 
-        # Lookup original Sentinel-2 scenes by scene_id
-        sen2_lookup = {
-            scene.scene_id: scene
-            for scene in sen2sr_scenes
-        }
+        # 4. Remove from best_sen3_scenes the scenes already processed
+        sen3_scenes_to_process = (
+            self.filter_out_existing_scenes(best_sen3_scenes, sen3_processed)
+            if sen3_processed
+            else best_sen3_scenes
+        )
 
-        for key, sen3_scene in sen3_scenes.items():
-            scene_id = sen3_scene.scene_id
+        logger.info(f"{len(sen3_scenes_to_process)} Sentinel-3 LST scenes will be processed")
 
-            if (
-                scene_id not in best_by_scene_dict
-                or sen3_scene.time_difference_minutes
-                < best_by_scene_dict[scene_id]["sen3_scene"].time_difference_minutes
-            ):
-                best_by_scene_dict[scene_id] = {
-                    "key": key,
-                    "sen2_scene": sen2_lookup.get(key),
-                    "sen3_scene": sen3_scene,
-                }
+        # 5. Search Sentinel-2 Cloud Mask from CDSE
+        sen3_scenes_to_process_clouds = self.search_sentinel2_cloud(sen3_scenes_to_process)
 
-        best_by_scene = list(best_by_scene_dict.values())
+        # 6. Loop over each Sentinel-3 scene to download and process the data, deleting temporary files after each iteration.
+        iccs_downloader = ICCSSentinel2Downloader()
+        sentinel2_downloader = Sentinel2Downloader()
+        sentinel3_downloader = Sentinel3Downloader()
 
+        logger.info("ICCS Username: %s", iccs_downloader.username)
+        logger.info(
+            "ICCS Password loaded: %s",
+            bool(iccs_downloader.password),
+        )
 
-        # 4. Search Sentinel-2 Cloud Mask from CDSE
-        sen2_clouds = self.search_sentinel2_cloud(best_by_scene)
+        logger.info("CDSE Username: %s", sentinel3_downloader.username)
+        logger.info(
+            "CDSE Password loaded: %s",
+            bool(sentinel3_downloader.password),
+        )
 
-        # 5. Download Sentinel-2 SR from ICCS S3 Storage
-        image_paths = self.download_images(best_by_scene)
+        for scene_pair in sen3_scenes_to_process_clouds:
+            sen2_scene = scene_pair.get("sen2_scene")
+            sen3_scene = scene_pair.get("sen3_scene")
+            sen2_cloud = scene_pair.get("s2_cloud")
 
-        outputs = []
-        # 6. Data Preprocessing
-        for i, (sen2sr_scene, sen3_scene, s2_mask20m) in enumerate(image_paths):
-            lowResFilename = self.unzip_sentinel3(sen3_scene)
+            try:
 
-            # Extract and Resample s2_mask at 10 meters
-            s2_mask10m = mask_resampling(s2_mask20m, sen2sr_scene, self.temp_directory)
+                # 7. Download Sentinel-2 SR from ICCS S3 Storage
+                image_paths = self.download_images(scene_pair, 
+                                                iccs_downloader, 
+                                                sentinel2_downloader, 
+                                                sentinel3_downloader)
 
-            # Get SR Sentinel-2 bounding box
-            # Reproject Sentinel-3 SLSTR and crop to SR Sentinel-2 bounding box
-            lowResFilename_reprojected, s3_mask = sentinel3_processor.s3_preprocessor(lowResFilename, sen2sr_scene)
+                if not image_paths:
+                    continue
 
-            logger.info('Starting Thermal Sharperning ...')
-            output = self.thermal_sharpening(sen2sr_scene, lowResFilename_reprojected, s2_mask10m, s3_mask)
+                # 8. Data Preprocessing
+                sen2sr_scene, sen3_scene, s2_mask20m = image_paths
+                lowResFilename = self.unzip_sentinel3(sen3_scene)
 
-            outputs.append(output)
+                # 9. Extract and Resample s2_mask at 10 meters
+                s2_mask10m = mask_resampling(s2_mask20m, sen2sr_scene, self.temp_directory)
 
-        if self.cleanup_data_tmp:
-            self.housekeeping()
+                # 10. Get SR Sentinel-2 bounding box
+                # Reproject Sentinel-3 SLSTR and crop to SR Sentinel-2 bounding box
+                lowResFilename_reprojected, s3_mask = sentinel3_processor.s3_preprocessor(lowResFilename, sen2sr_scene)
 
+                # 11. Thermal Sharpening
+                logger.info('Starting Thermal Sharperning ...')
+                output = self.thermal_sharpening(sen2sr_scene, lowResFilename_reprojected, s2_mask10m, s3_mask)
 
-        # 7. Create Output Thumbnails
-        '''
-        def create_thumbnail(feature_id: str):
-            from eo_library.thumbnails import create_thumbnail
+                if output is None:
+                    raise RuntimeError("Thermal Sharpening returned None.")
 
-            tiff_path = f"/mnt/workdir/outputs/SR_{feature_id}.tiff"
-            output_path = f"/mnt/workdir/outputs/SR_{feature_id}-ql.jpg"
+                output_path = Path(output)
 
-            thumbnail_size = (343, 343)
-            create_thumbnail(tiff_path, output_path, thumbnail_size)
+                if not output_path.is_file():
+                    raise RuntimeError(
+                        f"Thermal sharpened product does not exist: {output_path}"
+                    )
 
-        '''
+                if output_path.stat().st_size == 0:
+                    raise RuntimeError(
+                        f"Thermal sharpened product is empty: {output_path}"
+                    )
 
-        # 8. Save output and thumbnails to ICCS S3 - keep s3 links (output and thumbnails) for stac indexing
-        if self.save_to_s3:
+                outputs.append(str(output_path))
 
-            s3_client = s3_upload.create_s3_client(
-                 os.environ['S3_CLIENT_ID'],
-                 os.environ['S3_CLIENT_SECRET'],
-            )
-            logger.info(f'Saving Thermal Sharperning outputs to S3 bucket s3://{self.s3_visibility}/{self.s3_data_directory}')
+                # 12. Create thumbnails
+                output_ql = create_lst_thumbnail(output_path, self.thumbnail_size)
 
-            for output_filepath in outputs:
-                output_filename = Path(output_filepath).name
+                # 13. Upload final products and thumbnails to ICCS S3.
+                if self.s3_upload:
+                    s3_upload.put_output_to_s3(output_ql, self.s3_bucket, self.s3_collection_dir, self.s3_client)
+                    s3_upload.put_output_to_s3(output_path, self.s3_bucket, self.s3_collection_dir, self.s3_client)
 
-                '''
-                s3_upload.upload_if_not_exists_safe(
-                    s3_client,
-                    output_filepath,
-                    self.s3_visibility,
-                    os.path.join(self.s3_data_directory, output_filename)
+                # 14. TODO: Create STAC metadata for final products.
+                #file_footprint = stac_indexing.get_bbox_and_footprint(output_path)
+            
+
+                # 15. TODO: Post item at collection
+
+                logger.info(
+                    "Successfully processed Sentinel3 scene: %s",
+                    getattr(sen3_scene, "id", "unknown")
                 )
-                '''
 
-        # 9. Check if STAC Collection exists, else create it.
-
-
-        # 10. 
-        '''
-        def update_catalogue(feature_id: str):
-            from eo_library.stac_models import create_s2l2sr_stac_item
-            from eo_library.auth_utils import get_auth_header_client_credentials
-            from pystac import Item
-            import json
-            import httpx
-
-            with open(f"/mnt/workdir/features/{feature_id}.json", "r") as f:
-                item: Item = Item.from_dict(json.loads(f.read()))
-
-            created = create_s2l2sr_stac_item(item).to_dict()
-            auth_header = get_auth_header_client_credentials(
-                client_id=os.environ["CLIENT_ID"],
-                client_secret=os.environ["CLIENT_SECRET"],
-                token_endpoint="https://auth-eo.iccs.gr/realms/eo-platform/protocol/openid-connect/token",
-            )
-
-            with httpx.Client(headers=auth_header) as client:
-                response = client.put(
-                    url=f"https://platform-eo.iccs.gr/stac/collections/sentinel-2-l2a-sr-10m/items/{created['id']}",
-                    json=created,
+            except Exception:
+                logger.exception(
+                    "Error processing Sentinel-3 scene: %s",
+                    getattr(sen3_scene, "id", "unknown")
                 )
-                response.raise_for_status()
-        '''
 
+            finally:
+                # 12. Clean temporary files regardless of success or failure
+                if self.cleanup_data_tmp:
 
-        logger.info("Pipeline finished successfully")
+                    try:
+                        logger.info(
+                            "Cleaning temporary processing files..."
+                        )
+
+                        self.housekeeping(self.data_directory)
+
+                    except Exception:
+                        logger.exception(
+                            "Error during temporary file cleanup."
+                        )
+
+        logger.info("Pipeline finished")
 
         return outputs
         
-            
-
-            
 
         

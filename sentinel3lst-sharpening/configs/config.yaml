@@ -3,27 +3,26 @@ project:
 
 input:
   directory: "/data/sentinel3slstr"
-  
-  sentinel3:
-    min_overlap: 100
-  
-  sentinel2:
-    max_cloud_cover: 10
-    max_time_difference_hours: 1
-    
-  sentinel2sr:
-    max_cloud_cover: 10
-    max_time_difference_hours: 1
+
+search:
+  max_cloud_cover: 10
+  min_overlap: 80
+  max_time_difference_hours: 1
+
+thumbnail_size: [343, 343]
+
+cleanup_data_tmp: False
   
 output:
-  directory: "data/pansharpening_output"
-  format: "COG"
+  directory: "outputs"
+  format: "GeoTIFF"
 
 storage:
   s3:
-    enabled: false
-    bucket: null
-    prefix: "sentinel3-slstr-ntc-thermal-sharpened"
+    enabled: True
+    bucket: 'private-terravision'
+    prefix: "sentinel3-lst-ntc-thermal-sharpened-10m"
 
 stac:
-  collection_id: "sentinel3-slstr-ntc-thermal-sharpened"
+  enabled: False
+  collection_id: "sentinel3-lst-ntc-thermal-sharpened-10m"

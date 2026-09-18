@@ -2,6 +2,6 @@ dotenv
 pystac-client
 tqdm
 pyyaml 
-#h5py 
 boto3 
 httpx
+rich

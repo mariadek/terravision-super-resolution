@@ -1,8 +1,10 @@
 import os
 import time
-from boto3 import Session
+import logging
+from pathlib import Path, PurePosixPath
 
-from botocore.exceptions import ClientError, BotoCoreError
+import boto3
+from botocore.exceptions import ClientError
 from boto3.s3.transfer import TransferConfig
 from rich.progress import (
     Progress,
@@ -12,49 +14,8 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
-import logging
-
 logger = logging.getLogger(__name__)
-
-def create_s3_client(s3_client_id, s3_client_secret):
-    """Create an S3 client and verify that the credentials work."""
-
-    logger.info("ICCS S3 Username: %s", s3_client_id)
-    logger.info("ICCS Password loaded: %s", bool(s3_client_secret))
-
-    session = Session(
-        aws_access_key_id=s3_client_id,
-        aws_secret_access_key=s3_client_secret,
-    )
-
-    s3_client = session.client(
-        "s3",
-        endpoint_url="https://platform-eo-storage.iccs.gr",
-    )
-
-    try:
-        response = s3_client.list_buckets()
-
-        logger.info("S3 authentication successful")
-        logger.info(
-            "Available buckets: %s",
-            [bucket["Name"] for bucket in response.get("Buckets", [])],
-        )
-
-        return s3_client
-
-    except ClientError as e:
-        error = e.response.get("Error", {})
-        logger.error(
-            "S3 authentication/API request failed: %s - %s",
-            error.get("Code"),
-            error.get("Message"),
-        )
-        raise
-
-    except BotoCoreError as e:
-        logger.error("Could not communicate with S3: %s", e)
-        raise
+logging.getLogger("boto3").setLevel(logging.WARNING)
 
 def upload_if_not_exists_safe(
     client,
@@ -127,4 +88,30 @@ def upload_if_not_exists_safe(
 
     raise RuntimeError(
         f"Failed to upload after {max_retries} attempts."
+    )
+
+
+def put_output_to_s3(
+    output_path,
+    bucket,
+    collection_dir,
+    s3_client
+) -> bool:
+    """
+    Upload an output file to the specified S3 collection.
+    """
+
+    output_path = Path(output_path)
+
+    key = (
+        f"{collection_dir.strip('/')}/"
+        f"{output_path.name}"
+    )
+
+
+    return upload_if_not_exists_safe(
+        client=s3_client,
+        filename=output_path,
+        bucket=bucket,
+        key=key,
     )

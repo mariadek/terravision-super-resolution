@@ -61,8 +61,6 @@ class PipelineConfig:
         load_dotenv(PROJECT_ROOT / ".env")
 
         self.ICCS_STAC_URL = "https://platform-eo.iccs.gr/stac"
-        self.product_collection_id = 'enmap-l2a-pansharpened-10m'
-
         session = boto3.Session(
             aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
             aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
@@ -99,6 +97,9 @@ class PipelineConfig:
         # ---------------------------------------------------------
         self.crop_to_aoi = config['processing']['crop_to_aoi']
 
+        self.chunk_size = config['pansharpening']['chunk_size']
+        self.padding_size = config['pansharpening']['padding_size']
+
         # ---------------------------------------------------------
         # Output configuration
         # ---------------------------------------------------------
@@ -106,7 +107,7 @@ class PipelineConfig:
 
         # Temporary processing files
         self.temp_directory = self.data_directory / "tmp"
-        self.cleanup_data_tmp = config['housekeeping']['cleanup_data_tmp']
+        self.cleanup_data_tmp = config['cleanup_data_tmp']
 
         # Thumbnail settings
         self.thumbnail_size = tuple(config["thumbnail_size"])
@@ -118,7 +119,7 @@ class PipelineConfig:
 
         # STAC settings
         self.stac_indexing_enabled = config['stac']['enabled']
-        self.stac_collection_id = config['stac']['collection_id']
+        self.product_collection_id = config['stac']['collection_id']
 
     # =============================================================
     # PIPELINE FUNCTIONS
@@ -928,7 +929,6 @@ class PipelineConfig:
         outputs = []
 
         # 1. Search ICCS STAC - Check if there is the relevant collection and if not stop the workflow
-
         username = os.environ["ICCS_USERNAME"]
         password = os.environ["ICCS_PASSWORD"]
         iccs_auth = iccs_stac.KeycloakAuth(username, password)
@@ -941,7 +941,7 @@ class PipelineConfig:
             return
        
         # 2. Search in ICCS STAC to find the enmap scenes that have been already processed
-        enmap_processed = iccs_stac.search_ICCS_collection(aoi, datetime, "enmap-l2a-pansharpened-10m", iccs_auth)
+        enmap_processed = iccs_stac.search_ICCS_collection(aoi, datetime, self.product_collection_id, iccs_auth)
         if enmap_processed is not None:
             logger.info(f"{len(enmap_processed)} EnMAP products have already been processed.")
 
@@ -1029,7 +1029,9 @@ class PipelineConfig:
                     parameters.coeffs,
                     parameters.wavelength,
                     parameters.fwhm,
-                    self.output_directory
+                    self.output_directory,
+                    self.chunk_size,
+                    self.padding_size,
                 )
 
                 if output is None:
@@ -1066,14 +1068,14 @@ class PipelineConfig:
 
                 logger.info(
                     "Successfully processed EnMAP scene: %s",
-                    getattr(enmap_scene, "id", "unknown")
+                    enmap_scene.scene_id
                 )
 
             except Exception:
                 logger.exception(
                     "Error processing EnMAP scene: %s",
-                    getattr(enmap_scene, "id", "unknown")
-                )
+                    enmap_scene.scene_id)
+                
 
             finally:
                 # 12. Clean temporary files regardless of success or failure

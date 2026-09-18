@@ -9,7 +9,6 @@ from tqdm import tqdm
 
 import enmap_pansharpening.pansharpening as pansharpening
 
-
 logger = logging.getLogger(__name__)
 
 NODATA = -32768.0
@@ -17,6 +16,37 @@ DEFAULT_CHUNK_SIZE = 128
 DEFAULT_PADDING = 16
 DEFAULT_SCALE_RATIO = 3
 
+def to_int16(data: np.ndarray) -> np.ndarray:
+    """
+    Convert reconstructed hyperspectral data to int16.
+
+    - Replace NaN and infinite values with NODATA.
+    - Round valid floating-point values.
+    - Clip values to the int16 range.
+    - Preserve NODATA.
+    """
+    info = np.iinfo(np.int16)
+
+    data = np.asarray(data, dtype=np.float64)
+
+    invalid = ~np.isfinite(data) | (data == NODATA)
+
+    data = np.nan_to_num(
+        data,
+        nan=NODATA,
+        posinf=info.max,
+        neginf=NODATA,
+    )
+
+    data = np.clip(
+        np.rint(data),
+        info.min,
+        info.max,
+    )
+
+    data[invalid] = NODATA
+
+    return data.astype(np.int16)
 
 def read_reconstruction_inputs(
     hs_path: Path,
@@ -108,25 +138,15 @@ def get_chunk_positions(
     size: int,
     chunk_size: int,
 ) -> list[int]:
-    """Generate chunk starting positions including the final edge chunk."""
 
-    if size <= chunk_size:
-        return [0]
-
-    positions = list(
-        range(
-            0,
-            size - chunk_size + 1,
-            chunk_size,
+    if chunk_size <= 0:
+        raise ValueError(
+            "chunk_size must be positive"
         )
+
+    return list(
+        range(0, size, chunk_size)
     )
-
-    final_position = size - chunk_size
-
-    if positions[-1] != final_position:
-        positions.append(final_position)
-
-    return positions
 
 
 def reconstruct_hyperspectral(
@@ -188,13 +208,9 @@ def process_full_image(
         reconstructed,
         -1,
         0,
-    ).astype(np.float32)
-
-    data = np.where(
-        np.isnan(data),
-        NODATA,
-        data,
     )
+
+    data = to_int16(data)
 
     dst.write(data)
 
@@ -301,25 +317,62 @@ def process_chunk(
         :,
     ]
 
+    # Convert reconstructed core to Rasterio layout:
+    # (bands, rows, cols)
+
     data = np.moveaxis(
         reconstructed_core,
         -1,
         0,
-    ).astype(np.float32)
-
-    data = np.where(
-        np.isnan(data),
-        NODATA,
-        data,
     )
 
-    window = Window(
-        col_start * scale_ratio,
-        row_start * scale_ratio,
-        data.shape[2],
+    # Calculate output position
+    out_row = row_start * scale_ratio
+    out_col = col_start * scale_ratio
+
+    # Determine available space in the output raster
+    available_height = dst.height - out_row
+    available_width = dst.width - out_col
+
+    # Prevent writes outside the raster
+    write_height = min(
         data.shape[1],
+        available_height,
     )
 
+    write_width = min(
+        data.shape[2],
+        available_width,
+    )
+
+    # Skip chunks entirely outside the raster
+    if write_height <= 0 or write_width <= 0:
+        logger.warning(
+            "Skipping chunk outside raster: row=%s, col=%s",
+            out_row,
+            out_col,
+        )
+        return
+
+    # Crop data to match the valid output window
+    data = data[
+        :,
+        :write_height,
+        :write_width,
+    ]
+
+    # Convert to int16
+    data = to_int16(data)
+
+    # Create the matching output window
+    window = Window(
+        col_off=out_col,
+        row_off=out_row,
+        width=write_width,
+        height=write_height,
+    )
+
+    # Write safely
     dst.write(
         data,
         window=window,

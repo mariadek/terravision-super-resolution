@@ -15,7 +15,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 def validate_aoi(aoi: Any) -> Any:
-    """Validate either a bounding box or GeoJSON geometry."""
+    """Validate GeoJSON geometry."""
 
     if isinstance(aoi, dict):
         geometry_type = aoi.get("type")

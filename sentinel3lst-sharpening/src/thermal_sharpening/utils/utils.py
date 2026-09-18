@@ -1,3 +1,4 @@
+import os
 import rasterio
 import numpy as np
 import scipy.ndimage as ndi
@@ -5,6 +6,11 @@ from osgeo import gdal
 from numba import njit, stencil
 from shapely.geometry import shape
 from pathlib import Path
+
+from typing import Tuple
+from PIL import Image
+from matplotlib.colors import LinearSegmentedColormap
+
 
 def intersection_percentage(aoi_geojson, multipolygon_geojson):
     # Convert both geometries to shapely
@@ -94,3 +100,78 @@ def removeEdgeNaNs(a, i, j):
     if values.size == 0:
         return np.nan  # Return NaN if all elements are NaN
     return values.mean()  # Compute mean of non-NaN values
+
+def create_lst_thumbnail(
+    filepath: str,
+    thumbnail_size: Tuple[int, int],
+    p_min: float = 2,
+    p_max: float = 98,
+):
+    """
+    Generates LST thumbnail from .tiff file using Copernicus color ramp
+
+    Inputs:
+        - filepath (str): Full path to the input .tif file
+        - thumbnail_size (Tuple[int, int]): Thumbnail size (Width, Height)
+        - p_min (float): Lower percentile for normalization (default=2)
+        - p_max (float): Upper percentile for normalization (default=98)
+    """
+
+    colors = [
+        "#000080",
+        "#0000FF",
+        "#00FFFF",
+        "#00FF00",
+        "#FFFF00",
+        "#FF8000",
+        "#FF0000",
+        "#800000",
+    ]
+    cmap = LinearSegmentedColormap.from_list("copernicus_lst", colors, N=256)
+
+    with rasterio.open(filepath) as src:
+        lst_data = src.read(1)
+        nodata = src.nodata
+
+        # Exclude NaN and the raster's NoData value
+        valid_mask = ~np.isnan(lst_data)
+
+        if nodata is not None:
+            valid_mask &= lst_data != nodata
+
+        valid_data = lst_data[valid_mask]
+
+        if len(valid_data) == 0:
+            raise ValueError("No valid data found")
+
+        min_temp = np.percentile(valid_data, p_min)
+        max_temp = np.percentile(valid_data, p_max)
+
+        normalized = np.full_like(lst_data, np.nan)
+        normalized[valid_mask] = np.clip((lst_data[valid_mask] - min_temp) / (max_temp - min_temp), 0, 1)
+
+        rgba_array = cmap(normalized)
+        rgb_array = np.zeros((normalized.shape[0], normalized.shape[1], 3), dtype=np.uint8)
+
+        for i in range(3):
+            channel = rgba_array[:, :, i] * 255
+            channel[np.isnan(normalized)] = 0
+            rgb_array[:, :, i] = channel.astype(np.uint8)
+
+        image = Image.fromarray(rgb_array)
+        # Resize
+        thumbnail = image.copy()
+    
+        thumbnail.thumbnail(
+            thumbnail_size,
+            Image.Resampling.LANCZOS
+        )
+    
+        # Generate output path
+        base, _ = os.path.splitext(filepath)
+        output_path = f"{base}-ql.jpg"
+    
+        # Save
+        thumbnail.save(output_path)
+    
+        return Path(output_path)

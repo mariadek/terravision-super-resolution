@@ -14,7 +14,6 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-
 def validate_aoi(aoi: Any) -> Any:
     """Validate GeoJSON geometry."""
 
@@ -31,7 +30,6 @@ def validate_aoi(aoi: Any) -> Any:
             raise ValueError(
                 "GeoJSON AOI is missing the 'coordinates' field."
             )
-
 
         return {
             "type": geometry_type,
