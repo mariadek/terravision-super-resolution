@@ -1,14 +1,18 @@
 import os
 import re
+import logging
 import subprocess
 import numpy as np
 from typing import Tuple
 from PIL import Image
 from pathlib import Path
+from rio_cogeo import cog_validate
 
 import hashlib
 import rasterio
 from shapely.geometry import shape
+
+logger = logging.getLogger(__name__)
 
 def intersection_percentage(aoi_geojson, multipolygon_geojson):
     """
@@ -159,22 +163,47 @@ def create_thumbnail(
 
     return Path(output_path)
 
+
 def convert_to_cog(geotiff_path, bigtiff=False):
     """
-    Convert a GeoTIFF to a Cloud Optimized GeoTIFF (COG).
+    Convert a GeoTIFF to a Cloud Optimized GeoTIFF (COG)
+    and validate the output.
 
     Parameters
     ----------
-    geotiff_path : str
+    geotiff_path : str or Path
         Path to the input GeoTIFF.
-    bigtiff : bool
-        Whether to use optimized settings for large TIFF files.
+    bigtiff : bool, optional
+        Enable BigTIFF with optimized settings for large files.
+
+    Returns
+    -------
+    str
+        Output COG filename if conversion and validation succeed.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the input GeoTIFF does not exist.
+    subprocess.CalledProcessError
+        If GDAL conversion fails.
+    RuntimeError
+        If COG validation fails.
     """
 
-    # Generate output path
-    base, _ = os.path.splitext(geotiff_path)
-    cog_filename = f"{base}_COG.TIF"
+    geotiff_path = Path(geotiff_path)
 
+    if not geotiff_path.is_file():
+        raise FileNotFoundError(
+            f"Input GeoTIFF not found: {geotiff_path}"
+        )
+
+    # Generate output filename
+    cog_filename = geotiff_path.with_name(
+        f"{geotiff_path.stem}_COG.TIF"
+    )
+
+    # Build GDAL command
     cmd = [
         "gdal_translate",
         str(geotiff_path),
@@ -197,6 +226,19 @@ def convert_to_cog(geotiff_path, bigtiff=False):
             "-co", "COMPRESS=LZW",
         ])
 
+    # Convert to COG
     subprocess.run(cmd, check=True)
 
-    return cog_filename
+    # Validate COG
+    is_valid, errors, warnings = cog_validate(str(cog_filename))
+
+    if not is_valid:
+        raise RuntimeError(
+            f"COG validation failed: {cog_filename}\n"
+            f"Errors: {errors}\n"
+            f"Warnings: {warnings}"
+        )
+
+    logger.info(f"COG successfully created: {cog_filename}")
+
+    return str(cog_filename)
