@@ -5,7 +5,7 @@ from pathlib import Path
 
 @dataclass
 class Scene:
-    scene_id: str
+    id: str
     item: str
     data_href: str
     acquisition_datetime: datetime

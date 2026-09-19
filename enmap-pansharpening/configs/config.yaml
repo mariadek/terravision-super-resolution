@@ -25,17 +25,17 @@ pansharpening:
 output_directory: "outputs"
 output_COG: True
 
-cleanup_data_tmp: True
+cleanup_data_tmp: False
 request_delay_seconds: 2
 
 thumbnail_size: [343, 343]
 
 storage:
   s3:
-    enabled: False
+    enabled: True
     bucket: "private-terravision"
     prefix: "enmap-l2a-pansharpened-gsa-10m"
 
 stac:
-  enabled: False
+  enabled: True
   collection_id: "enmap-l2a-pansharpened-gsa-10m"

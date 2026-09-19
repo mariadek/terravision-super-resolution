@@ -483,7 +483,7 @@ def reconstruct_single_image(
         width=pan_data.shape[1],
         height=pan_data.shape[0],
         count=number_of_bands,
-        dtype="float32",
+        dtype="int16",
         crs=crs,
         transform=transform,
         nodata=NODATA,

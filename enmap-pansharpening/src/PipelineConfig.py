@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import httpx
 import time
 import logging
 import shutil
@@ -31,6 +32,8 @@ import enmap_pansharpening.pansharpening as pansharpening
 from enmap_pansharpening.reconstruction import (
     reconstruct_single_image,
 )
+
+import pystac
 import s3_upload
 import stac_indexing
 
@@ -65,8 +68,6 @@ class PipelineConfig:
             aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
             aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
                 )
-
-
         self.s3_client = session.client(
             "s3",
             endpoint_url="https://platform-eo-storage.iccs.gr",
@@ -166,7 +167,7 @@ class PipelineConfig:
                 continue
             
             scene = Scene(
-                scene_id=item.id,
+                id=item.id,
                 item=item,
                 xml_href= item.assets['metadata'].href, 
                 data_href= item.assets['image'].href,
@@ -196,7 +197,7 @@ class PipelineConfig:
 
         # Normalize IDs of already processed scenes
         existing_ids = {
-            re.sub(pattern, "", item.scene_id)
+            re.sub(pattern, "", item.id)
             for item in enmap_processed
         }
 
@@ -204,7 +205,7 @@ class PipelineConfig:
         final_scenes_to_process = [
             item
             for item in enmap_scenes
-            if re.sub(pattern, "", item.scene_id) not in existing_ids
+            if re.sub(pattern, "", item.id) not in existing_ids
         ]
 
         return final_scenes_to_process
@@ -250,7 +251,7 @@ class PipelineConfig:
                 ) >= self.overlap_percentage and intersection_percentage(enmap_scene.footprint, item.geometry) >= self.overlap_percentage:
         
                     scene = Scene(
-                        scene_id=item.id,
+                        id=item.id,
                         item=item,
                         data_href=item.assets.get("Product").href,
                         acquisition_datetime=item.datetime,
@@ -260,7 +261,7 @@ class PipelineConfig:
                     )
         
                     # EnMAP ID as the dictionary key
-                    sen2_scenes.setdefault(enmap_scene.scene_id, []).append(scene)
+                    sen2_scenes.setdefault(enmap_scene.id, []).append(scene)
 
             time.sleep(2)  # avoid API rate limiting
 
@@ -293,21 +294,21 @@ class PipelineConfig:
             "Start downloading EnMAP and matching Sentinel-2 scenes..."
         )
 
-        scenes = sen2_scenes.get(enmap_scene.scene_id, [])
+        scenes = sen2_scenes.get(enmap_scene.id, [])
 
         if not scenes:
-            sen2_scenes.pop(enmap_scene.scene_id, None)
+            sen2_scenes.pop(enmap_scene.id, None)
 
             logger.warning(
                 "No matching Sentinel-2 scenes found for EnMAP scene %s",
-                enmap_scene.scene_id
+                enmap_scene.id
             )
 
             return images
 
         logger.info(
             "EnMAP scene %s: %d Sentinel-2 scenes",
-            enmap_scene.scene_id,
+            enmap_scene.id,
             len(scenes)
         )
 
@@ -886,6 +887,168 @@ class PipelineConfig:
             sen2_cropped_path
         ]
 
+    def create_item_json(self, enmap_scene, sentinel2_scenes, image_dir, ql_dir):
+
+        # Convert inputs to Path objects
+        image_dir = Path(image_dir)
+        ql_dir = Path(ql_dir)
+
+        # --------------------------------------------------
+        # 1. Extract raster metadata
+        # --------------------------------------------------
+
+        bbox, footprint, crs = (
+            stac_indexing.get_bbox_and_footprint(image_dir)
+        )
+
+        #logger.info("BBox: %s, Footprint: %s, CRS: %s", bbox, footprint, crs)
+
+        datetime_utc = (
+            stac_indexing.get_acquisition_datetime(image_dir)
+        )
+
+        #logger.info("Acquisition datetime: %s", datetime_utc)
+
+        rows, columns, nodata, transform, gsd = (
+            stac_indexing.get_raster_info(image_dir)
+        )
+
+        #logger.info("Rows: %s, Columns: %s, NoData: %s, Transform: %s, GSD: %s", rows, columns, nodata, transform, gsd)
+
+        enmap_bands = stac_indexing.get_enmap_bands(image_dir)
+
+        #logger.info("EnMAP bands: %s", enmap_bands)
+
+        # --------------------------------------------------
+        # 2. Construct asset URLs
+        # --------------------------------------------------
+
+        collection_href = (
+            "https://platform-eo-storage.iccs.gr/"
+            f"private-terravision/{self.product_collection_id}"
+        )
+
+        asset_href = f"{collection_href}/{image_dir.name}"
+
+        quicklook_href = f"{collection_href}/{ql_dir.name}"
+
+        # --------------------------------------------------
+        # 3. Create STAC Item
+        # --------------------------------------------------
+
+        sentinel2 = sentinel2_scenes.get(enmap_scene.id, [])[0]
+        sentinel2_asset = sentinel2.item.assets.get("Product")
+
+        enmap_item = stac_indexing.create_processed_stac_item(
+            item_id=image_dir.stem,
+            collection_id=self.product_collection_id,
+
+            datetime_utc=datetime_utc,
+            geometry=footprint,
+            bbox=bbox,
+
+            asset_href=asset_href,
+            quicklook_href=quicklook_href,
+
+            sources=[
+                {
+                    "platform": "EnMAP",
+                    "product_id": enmap_scene.id,
+                    "item_href": enmap_scene.data_href
+                },
+                {
+                    "platform": "Sentinel-2",
+                    "product_id": sentinel2.id,
+                    "item_href": sentinel2_asset.href,
+                },
+            ],
+            
+
+            processing_method=(
+                "gram-schmidt-adaptive-pansharpening"
+            ),
+
+            processing_description=(
+                "EnMAP hyperspectral imagery pansharpened "
+                "at 10 m spatial resolution using the "
+                "Gram-Schmidt Adaptive pansharpening method."
+            ),
+
+            epsg=crs,
+
+            shape=[rows, columns],
+
+            transform=transform,
+
+            bands=enmap_bands,
+
+            gsd=gsd,
+
+            nodata=nodata,
+        )
+
+        # Remove existing collection links to avoid duplicates
+        enmap_item.remove_links("collection")
+
+        # Add the required collection link
+        enmap_item.add_link(
+            pystac.Link(
+                rel=pystac.RelType.COLLECTION,
+                target=collection_href,
+                media_type="application/json",
+            )
+        )
+
+        enmap_item.remove_links(pystac.RelType.SELF)
+
+        # --------------------------------------------------
+        # 4. Prepare output JSON path
+        # --------------------------------------------------
+
+        output_dir = Path(self.output_directory)
+
+        output_dir.mkdir(
+            parents=True,
+            exist_ok=True
+        )
+
+        item_path = output_dir / f"{enmap_item.id}.json"
+
+        # Assign the local STAC Item location
+        enmap_item.set_self_href(item_path.resolve().as_uri())
+
+        # --------------------------------------------------
+        # 5. Validate STAC Item
+        # --------------------------------------------------
+
+        try:
+            enmap_item.validate()
+
+        except Exception:
+            logger.exception(
+                "STAC validation failed for item: %s",
+                enmap_item.id
+            )
+            raise
+
+        logger.info(
+            "STAC Item validated successfully: %s",
+            enmap_item.id
+        )
+
+        # --------------------------------------------------
+        # 6. Save STAC Item JSON
+        # --------------------------------------------------
+
+        enmap_item.save_object()
+
+        logger.info(
+            "STAC Item saved to: %s",
+            item_path
+        )
+
+        return item_path
+
 
     def housekeeping(self, directory) -> None:
         """Remove the entire data and tmp directory."""
@@ -1066,22 +1229,29 @@ class PipelineConfig:
                     s3_upload.put_output_to_s3(output_path, self.s3_bucket, self.s3_collection_dir, self.s3_client)
                     s3_upload.put_output_to_s3(output_ql, self.s3_bucket, self.s3_collection_dir, self.s3_client)
 
-                # 16. TODO: Create STAC metadata for final products.
-                #file_footprint = stac_indexing.get_bbox_and_footprint(output_path)
-            
+                # 16. Collect metadata from final product. Output a json and use it to post the item
+                item_json = self.create_item_json(enmap_scene, sentinel2_scenes, output_path, output_ql)
 
-                # 17. TODO: Post item at collection
+
+                # 17. Post item at collection
+                if self.stac_indexing_enabled:
+                    with httpx.Client(headers=iccs_auth.headers) as client:
+                        response = client.put(
+                            url=f"https://platform-eo.iccs.gr/stac/collections/sentinel-2-l2a-sr-10m/items/{enmap_scene.id}",
+                            json=item_json,
+                                )
+                        response.raise_for_status()
 
 
                 logger.info(
                     "Successfully processed EnMAP scene: %s",
-                    enmap_scene.scene_id
+                    enmap_scene.id
                 )
 
             except Exception:
                 logger.exception(
                     "Error processing EnMAP scene: %s",
-                    enmap_scene.scene_id)
+                    enmap_scene.id)
                 
 
             finally:
