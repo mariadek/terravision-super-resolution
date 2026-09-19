@@ -1,10 +1,14 @@
 import numpy as np
+import logging
 from pathlib import Path
 import math
 import rasterio
 from skimage.transform import resize
+from enmap_pansharpening.download.models import PreprocessedPair
 
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class PansharpeningParameters:
@@ -393,3 +397,39 @@ def process_pansharpening_pair(
         means=means,
         coeffs=coeffs,
     )
+
+def pansharpen(
+    pair: PreprocessedPair,
+):
+    """Perform first-stage EnMAP pansharpening."""
+
+    logger.info(
+        "Starting first-stage pansharpening"
+    )
+
+    images = []
+    products = []
+
+    result = process_pansharpening_pair(
+        pair.enmap_path,
+        pair.sentinel2_pan_path,
+    )
+
+    images = [
+            result.hs_path,
+            result.pan_path,
+        ]
+    
+
+    products = PansharpeningParameters(
+            means=result.means,
+            coeffs=result.coeffs,
+            wavelength=pair.wavelength,
+            fwhm=pair.fwhm,
+        )
+
+    logger.info(
+        "First-stage pansharpening completed"
+    )
+
+    return images, products

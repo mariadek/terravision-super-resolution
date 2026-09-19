@@ -16,3 +16,13 @@ class Scene:
     data_path: Path | None = None
     xml_href: str | None = None
     overall_quality: str | None = None
+
+@dataclass
+class PreprocessedPair:
+    """Files and metadata produced for one EnMAP/Sentinel-2 pair."""
+
+    enmap_path: Path
+    sentinel2_b04_path: Path
+    sentinel2_pan_path: Path
+    wavelength: list[str]
+    fwhm: list[float]

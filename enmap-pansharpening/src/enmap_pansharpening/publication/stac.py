@@ -1,7 +1,10 @@
+import logging
+from pathlib import Path
+
 import re
 from datetime import datetime, timezone
 import rasterio
-from shapely.geometry import Polygon, mapping, box
+from shapely.geometry import mapping, box
 from rasterio.warp import transform_bounds
 from typing import Optional
 
@@ -9,7 +12,8 @@ import pystac
 from pystac.extensions.eo import EOExtension, Band
 from pystac.extensions.projection import ProjectionExtension
 from pystac.extensions.raster import RasterExtension, RasterBand
-from pystac.extensions.item_assets import ItemAssetsExtension
+
+logger = logging.getLogger(__name__)
 
 # -------------------------------------------------------------------
 # Get bbox and footprint in EPSG:4326
@@ -238,3 +242,163 @@ def create_processed_stac_item(
 
 
     return item
+
+def create_item_json(product_collection_id, enmap_scene, sentinel2_scene, image_dir, ql_dir):
+
+    # Convert inputs to Path objects
+    image_dir = Path(image_dir)
+    ql_dir = Path(ql_dir)
+
+    # --------------------------------------------------
+    # 1. Extract raster metadata
+    # --------------------------------------------------
+
+    bbox, footprint, crs = (
+        get_bbox_and_footprint(image_dir)
+    )
+
+    #logger.info("BBox: %s, Footprint: %s, CRS: %s", bbox, footprint, crs)
+
+    datetime_utc = (
+        get_acquisition_datetime(image_dir)
+    )
+
+    #logger.info("Acquisition datetime: %s", datetime_utc)
+
+    rows, columns, nodata, transform, gsd = (
+        get_raster_info(image_dir)
+    )
+
+    #logger.info("Rows: %s, Columns: %s, NoData: %s, Transform: %s, GSD: %s", rows, columns, nodata, transform, gsd)
+
+    enmap_bands = get_enmap_bands(image_dir)
+
+    #logger.info("EnMAP bands: %s", enmap_bands)
+
+    # --------------------------------------------------
+    # 2. Construct asset URLs
+    # --------------------------------------------------
+
+    collection_href = (
+        "https://platform-eo-storage.iccs.gr/"
+        f"private-terravision/{product_collection_id}"
+    )
+
+    asset_href = f"{collection_href}/{image_dir.name}"
+
+    quicklook_href = f"{collection_href}/{ql_dir.name}"
+
+    # --------------------------------------------------
+    # 3. Create STAC Item
+    # --------------------------------------------------
+
+    sentinel2_asset = sentinel2_scene.item.assets.get("Product")
+
+    if sentinel2_asset is None:
+        raise ValueError(
+            f"Missing Product asset for Sentinel-2 scene "
+            f"{sentinel2_scene.id}"
+        )
+
+    enmap_item = create_processed_stac_item(
+        item_id=image_dir.stem,
+        collection_id=product_collection_id,
+
+        datetime_utc=datetime_utc,
+        geometry=footprint,
+        bbox=bbox,
+
+        asset_href=asset_href,
+        quicklook_href=quicklook_href,
+
+        sources=[
+            {
+                "platform": "EnMAP",
+                "product_id": enmap_scene.id,
+                "item_href": enmap_scene.data_href
+            },
+            {
+                "platform": "Sentinel-2",
+                "product_id": sentinel2_scene.id,
+                "item_href": sentinel2_asset.href,
+            },
+        ],
+        
+
+        processing_method=(
+            "gram-schmidt-adaptive-pansharpening"
+        ),
+
+        processing_description=(
+            "EnMAP hyperspectral imagery pansharpened "
+            "at 10 m spatial resolution using the "
+            "Gram-Schmidt Adaptive pansharpening method."
+        ),
+
+        epsg=crs,
+
+        shape=[rows, columns],
+
+        transform=transform,
+
+        bands=enmap_bands,
+
+        gsd=gsd,
+
+        nodata=nodata,
+    )
+
+    # Remove existing collection links to avoid duplicates
+    enmap_item.remove_links("collection")
+
+    # Add the required collection link
+    enmap_item.add_link(
+        pystac.Link(
+            rel=pystac.RelType.COLLECTION,
+            target=collection_href,
+            media_type="application/json",
+        )
+    )
+
+    enmap_item.remove_links(pystac.RelType.SELF)
+
+    # --------------------------------------------------
+    # 4. Prepare output JSON path
+    # --------------------------------------------------
+
+    item_path = image_dir.parent / f"{enmap_item.id}.json"
+
+    # Assign the local STAC Item location
+    enmap_item.set_self_href(item_path.resolve().as_uri())
+
+    # --------------------------------------------------
+    # 5. Validate STAC Item
+    # --------------------------------------------------
+
+    try:
+        enmap_item.validate()
+
+    except Exception:
+        logger.exception(
+            "STAC validation failed for item: %s",
+            enmap_item.id
+        )
+        raise
+
+    logger.info(
+        "STAC Item validated successfully: %s",
+        enmap_item.id
+    )
+
+    # --------------------------------------------------
+    # 6. Save STAC Item JSON
+    # --------------------------------------------------
+
+    enmap_item.save_object()
+
+    logger.info(
+        "STAC Item saved to: %s",
+        item_path
+    )
+
+    return item_path
