@@ -288,8 +288,6 @@ class PipelineConfig:
             List of [EnMAP path, Sentinel-2 path] pairs.
         """
 
-        images = []
-
         logger.info(
             "Start downloading EnMAP and matching Sentinel-2 scenes..."
         )
@@ -304,7 +302,7 @@ class PipelineConfig:
                 enmap_scene.id
             )
 
-            return images
+            return None
 
         logger.info(
             "EnMAP scene %s: %d Sentinel-2 scenes",
@@ -312,46 +310,62 @@ class PipelineConfig:
             len(scenes)
         )
 
-        # Download EnMAP scene once
-        enmap_download_path = enmap_downloader.download_item(
-            enmap_scene.item,
-            download_root=self.enmap_data_root
+        # Select the closest acquisition in time, breaking ties by cloud cover.
+        scenes = sorted(
+            scenes,
+            key=lambda scene: (
+                abs(
+                    (
+                        scene.acquisition_datetime
+                        - enmap_scene.acquisition_datetime
+                    ).total_seconds()
+                ),
+                (
+                    float(scene.cloud_cover)
+                    if scene.cloud_cover is not None
+                    else float("inf")
+                ),
+            ),
         )
 
-        # Download matching Sentinel-2 scenes
-        for sen2_scene in scenes:
+        sen2_scene = scenes[0]
+        logger.info("Selected Sentinel-2 scene %s for EnMAP %s", sen2_scene.id, enmap_scene.id)
+        enmap_download_path = enmap_downloader.download_item(
+            enmap_scene.item, download_root=self.enmap_data_root
+        )
 
-            if self.download_full_sen2_item:
+        if self.download_full_sen2_item:
 
-                # Download the whole Sentinel-2 item
-                sen2_download_path = sentinel2_downloader.download_item(
-                    sen2_scene.item,
-                    download_root=self.sen2_data_root
-                )
+            # Download the whole Sentinel-2 item
+            sen2_download_path = sentinel2_downloader.download_item(
+                sen2_scene.item,
+                download_root=self.sen2_data_root
+            )
 
-            else:
+        else:
 
-                # Download only the required Sentinel-2 10 m bands
-                sentinel2_downloader.download_s3_assets(
-                    sen2_scene.item,
-                    ("B04_10m", "B03_10m", "B02_10m", "B08_10m"),
-                    download_root=self.sen2_data_root
-                )
+            # Download only the required Sentinel-2 10 m bands
+            sentinel2_downloader.download_s3_assets(
+                sen2_scene.item,
+                ("B04_10m", "B03_10m", "B02_10m", "B08_10m"),
+                download_root=self.sen2_data_root
+            )
 
-                # Sentinel-2 assets are stored under the scene directory
-                sen2_download_path = os.path.join(
-                    self.sen2_data_root,
-                    sen2_scene.item.id
-                )
+            # Sentinel-2 assets are stored under the scene directory
+            sen2_download_path = os.path.join(
+                self.sen2_data_root,
+                sen2_scene.item.id
+            )
 
-            # Store the EnMAP / Sentinel-2 pair
-            images = [
-                str(enmap_download_path),
-                str(sen2_download_path)
-            ]
+        # Store the EnMAP / Sentinel-2 pair
+        images = [
+            str(enmap_download_path),
+            str(sen2_download_path)
+        ]
 
-        return images
-    
+        return images, sen2_scene
+        
+
 
     def preprocess_enmap(
         self,
@@ -887,7 +901,7 @@ class PipelineConfig:
             sen2_cropped_path
         ]
 
-    def create_item_json(self, enmap_scene, sentinel2_scenes, image_dir, ql_dir):
+    def create_item_json(self, enmap_scene, sentinel2_scene, image_dir, ql_dir):
 
         # Convert inputs to Path objects
         image_dir = Path(image_dir)
@@ -936,8 +950,13 @@ class PipelineConfig:
         # 3. Create STAC Item
         # --------------------------------------------------
 
-        sentinel2 = sentinel2_scenes.get(enmap_scene.id, [])[0]
-        sentinel2_asset = sentinel2.item.assets.get("Product")
+        sentinel2_asset = sentinel2_scene.item.assets.get("Product")
+
+        if sentinel2_asset is None:
+            raise ValueError(
+                f"Missing Product asset for Sentinel-2 scene "
+                f"{sentinel2_scene.id}"
+            )
 
         enmap_item = stac_indexing.create_processed_stac_item(
             item_id=image_dir.stem,
@@ -958,7 +977,7 @@ class PipelineConfig:
                 },
                 {
                     "platform": "Sentinel-2",
-                    "product_id": sentinel2.id,
+                    "product_id": sentinel2_scene.id,
                     "item_href": sentinel2_asset.href,
                 },
             ],
@@ -1050,28 +1069,47 @@ class PipelineConfig:
         return item_path
 
 
-    def housekeeping(self, directory) -> None:
-        """Remove the entire data and tmp directory."""
+    def housekeeping(self, directory: str | Path) -> None:
+        """Safely remove only the temporary processing directory."""
+
+        directory = Path(directory).resolve()
+        temp_directory = self.temp_directory.resolve()
+
+        if directory != temp_directory:
+            raise ValueError(
+                f"Refusing to delete non-temporary directory: {directory}"
+            )
+
+        if directory == Path(directory.anchor):
+            raise ValueError(
+                "Refusing to delete a filesystem root."
+            )
+
         if not directory.exists():
-            logger.info("No data directory to clean up.")
+            logger.info(
+                "Temporary directory does not exist: %s",
+                directory,
+            )
             return
 
         logger.info(
-            "Cleaning tmp directory: %s",
+            "Cleaning temporary directory: %s",
             directory,
         )
 
         try:
             shutil.rmtree(directory)
-        except OSError as exc:
-            logger.warning(
-                "Could not completely remove tmp directory %s: %s",
-                directory,
-                exc,
-            )
-        else:
-            logger.info("Data directory removed successfully.")
 
+        except OSError:
+            logger.exception(
+                "Failed to clean temporary directory: %s",
+                directory,
+            )
+            raise
+
+        logger.info(
+            "Temporary directory removed successfully."
+        )
     # =============================================================
     # MAIN PIPELINE
     # =============================================================
@@ -1091,6 +1129,7 @@ class PipelineConfig:
 
         logger.info("Starting pipeline - TERRAVISION EnMAP Pansharpening")
         outputs = []
+        failures = []
 
         # 1. Search ICCS STAC - Check if there is the relevant collection and if not stop the workflow
         username = os.environ["ICCS_USERNAME"]
@@ -1153,6 +1192,7 @@ class PipelineConfig:
                     continue
 
                 # 7. Preprocess source imagery
+                download_path, selected_sentinel2 = download_path
                 enmap_path, sen2_path = download_path
                 processed = self.preprocess_pairs(enmap_path, sen2_path)
 
@@ -1230,16 +1270,24 @@ class PipelineConfig:
                     s3_upload.put_output_to_s3(output_ql, self.s3_bucket, self.s3_collection_dir, self.s3_client)
 
                 # 16. Collect metadata from final product. Output a json and use it to post the item
-                item_json = self.create_item_json(enmap_scene, sentinel2_scenes, output_path, output_ql)
+                item_json = self.create_item_json(enmap_scene, selected_sentinel2, output_path, output_ql)
 
 
                 # 17. Post item at collection
                 if self.stac_indexing_enabled:
                     with httpx.Client(headers=iccs_auth.headers) as client:
                         response = client.put(
-                            url=f"https://platform-eo.iccs.gr/stac/collections/sentinel-2-l2a-sr-10m/items/{enmap_scene.id}",
-                            json=item_json,
-                                )
+                            url=(
+                                f"{self.ICCS_STAC_URL}/collections/"
+                                f"{self.product_collection_id}/items/"
+                                f"{output_path.stem}"
+                            ),
+                            json=json.loads(
+                                item_path.read_text(encoding="utf-8")
+                            ),
+                            timeout=60.0,
+                        )
+
                         response.raise_for_status()
 
 
@@ -1249,6 +1297,7 @@ class PipelineConfig:
                 )
 
             except Exception:
+                failures.append(enmap_scene.id)
                 logger.exception(
                     "Error processing EnMAP scene: %s",
                     enmap_scene.id)
@@ -1270,6 +1319,8 @@ class PipelineConfig:
                             "Error during temporary file cleanup."
                         )
 
-        logger.info("Pipeline finished")
-
+        logger.info("Pipeline finished: %d products, %d failed scenes", len(outputs), len(failures))
+        if failures:
+            logger.warning("Failed EnMAP scene IDs: %s", ", ".join(failures))
         return outputs
+

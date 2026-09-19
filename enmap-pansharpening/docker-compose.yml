@@ -6,6 +6,15 @@ services:
 
     env_file:
       - .env
+      # DLR_USERNAME=
+      # DLR_PASSWORD=
+      # CDSE_USERNAME=
+      # CDSE_PASSWORD=
+      # ICCS_USERNAME=
+      # ICCS_PASSWORD
+      # AWS_ACCESS_KEY_ID=
+      # AWS_SECRET_ACCESS_KEY
+
 
     image: enmap_pansharp:latest
     container_name: enmap_pansharp
