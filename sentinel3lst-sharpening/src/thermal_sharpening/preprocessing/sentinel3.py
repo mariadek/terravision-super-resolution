@@ -2,6 +2,8 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
+from zipfile import ZipFile
+
 
 import netCDF4
 import numpy as np
@@ -16,6 +18,9 @@ CREATION_OPTIONS = [
     "PREDICTOR=2",
 ]
 
+import logging
+
+logger = logging.getLogger()
 
 def _write_tiff(path, array, driver, nodata=None):
     """Write a 2D NumPy array to a single-band Float32 GeoTIFF."""
@@ -370,3 +375,58 @@ def s3_preprocessor(filename, highfile):
         shutil.move(str(warped_mask), str(output_mask))
 
     return output_lst, output_mask
+
+
+def unzip_sentinel3(inputs3, temp_directory):
+    """
+    Unzip a Sentinel-3 SLSTR product into a tmp folder.
+
+    Parameters
+    ----------
+    inputs3 : str or Path
+        Path to the Sentinel-3 ZIP file.
+
+    Returns
+    -------
+    Path
+        Path to the extracted .SEN3 directory.
+    """
+    zip_file_path = Path(inputs3)
+
+    # tmp folder next to the ZIP file
+    temp_directory.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    
+    # Expected extracted Sentinel-3 directory
+    extracted_zip_file_path = temp_directory / f"{zip_file_path.stem}.SEN3"
+
+    if extracted_zip_file_path.exists():
+        logger.info("Sentinel-3 SLSTR is already unzipped.")
+        return extracted_zip_file_path
+
+    if not zip_file_path.exists():
+        raise FileNotFoundError(
+            f"Sentinel-3 ZIP file not found: {zip_file_path}"
+        )
+
+    logger.info(f"Unzipping {zip_file_path.name} to {temp_directory}...")
+
+    try:
+        with ZipFile(zip_file_path, "r") as zip_obj:
+            zip_obj.extractall(temp_directory)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to unzip Sentinel-3 product: {zip_file_path}"
+        ) from exc
+
+    if not extracted_zip_file_path.exists():
+        raise FileNotFoundError(
+            f"ZIP was extracted, but expected directory was not found: "
+            f"{extracted_zip_file_path}"
+        )
+
+    logger.info("Sentinel-3 SLSTR successfully unzipped.")
+
+    return extracted_zip_file_path

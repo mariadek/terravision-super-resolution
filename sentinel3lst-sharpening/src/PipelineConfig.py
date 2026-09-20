@@ -1,10 +1,10 @@
 from pathlib import Path
 from datetime import datetime, timedelta
-from zipfile import ZipFile
 
 import os
 import sys
 import time
+import httpx
 import logging
 import hashlib
 import shutil
@@ -17,14 +17,17 @@ from tqdm import tqdm
 from dotenv import load_dotenv
 
 import thermal_sharpening.download.iccs as iccs_stac
+import thermal_sharpening.download.scene_search as scene_search
+
 from thermal_sharpening.download.sentinel2 import Sentinel2Downloader
 from thermal_sharpening.download.sentinel3 import Sentinel3Downloader
 from thermal_sharpening.download.sentinel2SR_ICCS import ICCSSentinel2Downloader
-from thermal_sharpening.utils.utils import intersection_percentage, mask_resampling, create_lst_thumbnail
+from thermal_sharpening.utils.utils import mask_resampling, create_lst_thumbnail, convert_to_cog
 from thermal_sharpening.download.models import Scene
-import thermal_sharpening.preprocessing.sentinel2 as sentinel2_processor
 import thermal_sharpening.preprocessing.sentinel3 as sentinel3_processor
 import thermal_sharpening.tsharpening as thermal_sharpening
+import thermal_sharpening.publication.stac as stac
+
 import s3_upload
 
 logger = logging.getLogger()
@@ -83,6 +86,7 @@ class PipelineConfig:
         # Output configuration
         # ---------------------------------------------------------
         self.output_directory = config['output']['directory']
+        self.output_cog = config['output_COG']
         self.cleanup_data_tmp = config['cleanup_data_tmp']
 
         # Thumbnail settings
@@ -102,234 +106,6 @@ class PipelineConfig:
     # =============================================================
     # PIPELINE FUNCTIONS
     # =============================================================
-
-    def search_iccssen2sr_images(self, aoi: dict, datetime: str):
-        """
-        Search for satellite images using the runtime AOI.
-
-        Args:
-            aoi: User-provided AOI JSON.
-
-        Returns:
-            Images found for the AOI.
-        """
-
-        logger.info("Searching Sentinel-2 SR images for user-defined AOI and datetime")
-
-        iccss2downloader = ICCSSentinel2Downloader()
-        
-        search_results = iccss2downloader.search(aoi, datetime, query={"eo:cloud_cover": {"lt": self.max_cloud_cover}})
-
-        scenes = []
-
-        for item in search_results:
-
-            overlap = intersection_percentage(aoi, item.geometry)
-
-            if overlap < self.overlap_percentage:
-                    continue
-            
-            scene = Scene(
-                scene_id=item.id,
-                item=item,
-                data_href= item.assets['sr-10-image'].href,
-                acquisition_datetime=item.datetime,
-                crs=item.properties.get("proj:code"),
-                footprint=item.geometry,
-                cloud_cover=item.properties.get("eo:cloud_cover"),
-            )
-            scenes.append(scene)
-
-
-        logger.info(
-            f"Image search completed: %d images found with greater than {self.overlap_percentage} percent overlap with aoi",
-            len(scenes)
-        )
-
-        return scenes
-
-    def search_sentinel3_images(self, sen2sr_scenes: list, aoi: dict):
-        """
-        Search for Sentinel-3 images corresponding to each Sentinel-2 SR scene.
-
-        Sentinel-3 scenes are sorted by:
-            1. Intersection percentage with the AOI (descending)
-            2. Time difference from the Sentinel-2 acquisition time (ascending)
-
-        Args:
-            sen2sr_scenes: List of Sentinel-2 SR scenes retrieved from ICCS.
-            aoi: Runtime AOI.
-
-        Returns:
-            Dictionary mapping Sentinel-2 scene IDs to sorted Sentinel-3 scenes.
-        """
-
-        logger.info("Searching Sentinel-3 images for each Sentinel-2 SR scene")
-
-        sen3_scenes = {}
-        downloader = Sentinel3Downloader()
-
-        for sen2sr_scene in sen2sr_scenes:
-            dt = sen2sr_scene.acquisition_datetime
-
-            start = dt - timedelta(hours=self.max_time_difference)
-            end = dt + timedelta(hours=self.max_time_difference)
-
-            s2_datetime = (
-                f"{start.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-4]}/"
-                f"{end.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-4]}"
-            )
-
-            sen3_search_results = downloader.search(
-                sen2sr_scene.footprint,
-                datetime=s2_datetime,
-                query={"eo:cloud_cover": {"lt": self.max_cloud_cover}},
-            )
-
-            for item in sen3_search_results:
-
-                # Calculate AOI intersection
-                intersection = intersection_percentage(
-                    aoi,
-                    item.geometry
-                )
-
-                if intersection <= self.overlap_percentage:
-                    continue
-
-                # Calculate temporal difference in minutes
-                time_difference = abs(
-                    (item.datetime - dt).total_seconds()
-                ) / 60
-
-                scene = Scene(
-                    scene_id=item.id,
-                    item=item,
-                    data_href=item.assets.get("product").href,
-                    acquisition_datetime=item.datetime,
-                    crs=item.properties.get("proj:code"),
-                    footprint=item.geometry,
-                    cloud_cover=item.properties.get("eo:cloud_cover"),
-                    intersection_percentage = intersection,
-                    time_difference_minutes = time_difference
-                )
-
-                # Sentinel-2 scene ID as dictionary key
-                sen3_scenes.setdefault(
-                    sen2sr_scene.scene_id,
-                    []
-                ).append(scene)
-
-            time.sleep(2)  # Avoid rate limiting
-
-        # Sort Sentinel-3 scenes for each Sentinel-2 scene
-        for scene_id, scenes in sen3_scenes.items():
-            scenes.sort(
-                key=lambda scene: (
-                    -scene.intersection_percentage,
-                    scene.time_difference_minutes,
-                )
-            )
-            sen3_scenes[scene_id] = scenes[0] # Pick only the best match
-
-        return sen3_scenes
-
-    def search_sentinel2_cloud(self, best_by_scene: list):
-        """
-        Search for Sentinel-2 cloud masks corresponding to each selected
-        Sentinel-2 SR scene and add them directly to best_by_scene.
-
-        Args:
-            best_by_scene: List of dictionaries containing:
-                - key
-                - sen2_scene
-                - sen3_scene
-
-        Returns:
-            Updated best_by_scene containing an additional "s2_cloud" field.
-        """
-
-        logger.info(
-            "Searching Sentinel-2 cloud mask for each selected Sentinel-2 SR scene"
-        )
-
-        downloader = Sentinel2Downloader()
-
-        for record in best_by_scene:
-
-            sen2_scene = record["sen2_scene"]
-
-            # Default if no cloud product is found
-            record["s2_cloud"] = None
-
-            if sen2_scene is None:
-                logger.warning(
-                    f"Sentinel-2 SR scene not found for {record['key']}"
-                )
-                continue
-
-            sen2_search_results = downloader.search(
-                sen2_scene.footprint,
-                datetime=sen2_scene.acquisition_datetime,
-                query={
-                    "id": {
-                        "eq": sen2_scene.scene_id.removeprefix("SR_")
-                    }
-                },
-            )
-
-            for item in sen2_search_results:
-
-                record["s2_cloud"] = Scene(
-                    scene_id=sen2_scene.scene_id,
-                    item=item,
-                    data_href=item.assets.get("SCL_20m").href,
-                    acquisition_datetime=item.datetime,
-                    crs=item.properties.get("proj:code"),
-                    footprint=item.geometry,
-                    cloud_cover=item.properties.get("eo:cloud_cover"),
-                )
-
-                # Exact product ID, so one result is sufficient
-                break
-
-            if record["s2_cloud"] is None:
-                logger.warning(
-                    f"No Sentinel-2 cloud mask found for "
-                    f"{sen2_scene.scene_id}"
-                )
-
-            time.sleep(2)
-
-        return best_by_scene
-
-    def get_best_by_scene(self, sen2sr_scenes, sen3_scenes):
-        """Select the Sentinel-3 scene with the smallest time difference per scene ID."""
-
-        best_by_scene_dict = {}
-
-        # Lookup original Sentinel-2 scenes by scene_id
-        sen2_lookup = {
-            scene.scene_id: scene
-            for scene in sen2sr_scenes
-        }
-
-        for key, sen3_scene in sen3_scenes.items():
-            scene_id = sen3_scene.scene_id
-
-            if (
-                scene_id not in best_by_scene_dict
-                or sen3_scene.time_difference_minutes
-                < best_by_scene_dict[scene_id]["sen3_scene"].time_difference_minutes
-            ):
-                best_by_scene_dict[scene_id] = {
-                    "key": key,
-                    "sen2_scene": sen2_lookup.get(key),
-                    "sen3_scene": sen3_scene,
-                }
-
-        return list(best_by_scene_dict.values())
-
     
     def download_images(self, scene_pair: dict, iccs_downloader, sentinel2_downloader, sentinel3_downloader):
         """
@@ -364,7 +140,7 @@ class PipelineConfig:
         if sen2_scene is None:
             logger.warning(
                 "No Sentinel-2 SR scene for %s",
-                record.get("key"),
+                scene_pair.get("key"),
             )
             return image_pair_paths
 
@@ -372,7 +148,7 @@ class PipelineConfig:
         if sen3_scene is None:
             logger.warning(
                 "No Sentinel-3 scene for %s",
-                sen2_scene.scene_id,
+                sen2_scene.id,
             )
             return image_pair_paths
 
@@ -380,7 +156,7 @@ class PipelineConfig:
         if sen2_cloud is None:
             logger.warning(
                 "No Sentinel-2 cloud mask for %s",
-                sen2_scene.scene_id,
+                sen2_scene.id,
             )
             return image_pair_paths
 
@@ -388,8 +164,8 @@ class PipelineConfig:
             "Sentinel-2 SR scene %s -> "
             "Sentinel-3 scene %s "
             "(time difference: %.2f minutes)",
-            sen2_scene.scene_id,
-            sen3_scene.scene_id,
+            sen2_scene.id,
+            sen3_scene.id,
             sen3_scene.time_difference_minutes,
         )
 
@@ -428,59 +204,6 @@ class PipelineConfig:
         
         return image_pair_paths
     
-    def unzip_sentinel3(self, inputs3):
-        """
-        Unzip a Sentinel-3 SLSTR product into a tmp folder.
-
-        Parameters
-        ----------
-        inputs3 : str or Path
-            Path to the Sentinel-3 ZIP file.
-
-        Returns
-        -------
-        Path
-            Path to the extracted .SEN3 directory.
-        """
-        zip_file_path = Path(inputs3)
-
-        # tmp folder next to the ZIP file
-        self.temp_directory.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
-        
-        # Expected extracted Sentinel-3 directory
-        extracted_zip_file_path = self.temp_directory / f"{zip_file_path.stem}.SEN3"
-
-        if extracted_zip_file_path.exists():
-            logger.info("Sentinel-3 SLSTR is already unzipped.")
-            return extracted_zip_file_path
-
-        if not zip_file_path.exists():
-            raise FileNotFoundError(
-                f"Sentinel-3 ZIP file not found: {zip_file_path}"
-            )
-
-        logger.info(f"Unzipping {zip_file_path.name} to {self.temp_directory}...")
-
-        try:
-            with ZipFile(zip_file_path, "r") as zip_obj:
-                zip_obj.extractall(self.temp_directory)
-        except Exception as exc:
-            raise RuntimeError(
-                f"Failed to unzip Sentinel-3 product: {zip_file_path}"
-            ) from exc
-
-        if not extracted_zip_file_path.exists():
-            raise FileNotFoundError(
-                f"ZIP was extracted, but expected directory was not found: "
-                f"{extracted_zip_file_path}"
-            )
-
-        logger.info("Sentinel-3 SLSTR successfully unzipped.")
-
-        return extracted_zip_file_path
 
     def thermal_sharpening(self, sen2sr_scene, lowResFilename_reprojected, s2_mask, s3_mask):
 
@@ -563,43 +286,54 @@ class PipelineConfig:
             Pipeline results.
         """
 
-        logger.info("Starting pipeline - Terravision Sentinel-3 SLSTR Thermal Sharpening")
+        logger.info("Starting pipeline - TERRAVISION EnMAP Pansharpening")
         outputs = []
+        failures = []
 
         # 1. Search ICCS STAC - Check if there is the relevant collection and if not stop the workflow
-        username = os.environ["ICCS_USERNAME"]
-        password = os.environ["ICCS_PASSWORD"]
-        iccs_auth = iccs_stac.KeycloakAuth(username, password)
+        iccs_username = os.environ["ICCS_USERNAME"]
+        iccs_password = os.environ["ICCS_PASSWORD"]
+        
+        logger.info("ICCS Username: %s", iccs_username)
+        logger.info("ICCS Password loaded: %s", bool(iccs_password))
+
+        iccs_auth = iccs_stac.KeycloakAuth(iccs_username, iccs_password)
         logger.info("Checking ICCS STAC for collection '%s' at %s", self.product_collection_id, self.ICCS_STAC_URL,)
         collection_exists = iccs_stac.collection_exists(self.ICCS_STAC_URL, self.product_collection_id, iccs_auth,)
         logger.info("ICCS STAC collection '%s' exists: %s", self.product_collection_id, collection_exists,)
+
         if not collection_exists:
             logger.info("Need to create the STAC collection '%s' at %s", self.product_collection_id,  self.ICCS_STAC_URL,)
             return
         
-
         # 2. Search in ICCS STAC to find the enmap scenes that have been already processed
         sen3_processed = iccs_stac.search_ICCS_collection(aoi, datetime, self.product_collection_id, iccs_auth)
         if sen3_processed is not None:
             logger.info(f"{len(sen3_processed)} Sentinel-3 LST products have already been processed.")
 
-        # 3. Search Sentinel-2 SR images from ICCS STAC using the user defined aoi and datetime
-        sen2sr_scenes = self.search_iccssen2sr_images(aoi, datetime)
+        # 3. Search Sentinel-2 SR images from ICCS STAC using the user defined aoi and datetime 
+        iccs_downloader = ICCSSentinel2Downloader()
+
+        sen2sr_scenes = scene_search.search_iccssen2sr_images(aoi, datetime, iccs_downloader, self.max_cloud_cover, self.overlap_percentage)
         if not sen2sr_scenes:
             logger.warning("No SR Sentinel-2 images found for this aoi and datetime. You have to execute the Sentinel-2 SR workflow first.")
             return None
 
         # 3. Search Sentinel-3 SLSTR images using retrieved Sentinel-2 SR image footprints and acquisition datetime
-        sen3_scenes = self.search_sentinel3_images(sen2sr_scenes, aoi)
+        sentinel3_downloader = Sentinel3Downloader()
+        logger.info("CDSE Username: %s", sentinel3_downloader.username)
+        logger.info("CDSE Password loaded: %s", bool(sentinel3_downloader.password),)
+
+        sen3_scenes = scene_search.search_sentinel3_images(sen2sr_scenes, aoi, sentinel3_downloader, self.max_cloud_cover, self.overlap_percentage, self.max_time_difference)
         if not sen3_scenes:
             logger.warning("No Sentinel-3 images found for the retrieved EnMAP images")
             return None
 
-        best_sen3_scenes = self.get_best_by_scene(sen2sr_scenes, sen3_scenes)
+        best_sen3_scenes = scene_search.get_best_by_scene(sen2sr_scenes, sen3_scenes)
 
         # 4. Remove from best_sen3_scenes the scenes already processed
         sen3_scenes_to_process = (
-            self.filter_out_existing_scenes(best_sen3_scenes, sen3_processed)
+            scene_search.filter_out_existing_scenes(best_sen3_scenes, sen3_processed)
             if sen3_processed
             else best_sen3_scenes
         )
@@ -607,24 +341,10 @@ class PipelineConfig:
         logger.info(f"{len(sen3_scenes_to_process)} Sentinel-3 LST scenes will be processed")
 
         # 5. Search Sentinel-2 Cloud Mask from CDSE
-        sen3_scenes_to_process_clouds = self.search_sentinel2_cloud(sen3_scenes_to_process)
+        sentinel2_downloader = Sentinel2Downloader()
+        sen3_scenes_to_process_clouds = scene_search.search_sentinel2_cloud(sen3_scenes_to_process, sentinel2_downloader)
 
         # 6. Loop over each Sentinel-3 scene to download and process the data, deleting temporary files after each iteration.
-        iccs_downloader = ICCSSentinel2Downloader()
-        sentinel2_downloader = Sentinel2Downloader()
-        sentinel3_downloader = Sentinel3Downloader()
-
-        logger.info("ICCS Username: %s", iccs_downloader.username)
-        logger.info(
-            "ICCS Password loaded: %s",
-            bool(iccs_downloader.password),
-        )
-
-        logger.info("CDSE Username: %s", sentinel3_downloader.username)
-        logger.info(
-            "CDSE Password loaded: %s",
-            bool(sentinel3_downloader.password),
-        )
 
         for scene_pair in sen3_scenes_to_process_clouds:
             sen2_scene = scene_pair.get("sen2_scene")
@@ -643,19 +363,19 @@ class PipelineConfig:
                     continue
 
                 # 8. Data Preprocessing
-                sen2sr_scene, sen3_scene, s2_mask20m = image_paths
-                lowResFilename = self.unzip_sentinel3(sen3_scene)
+                sen2sr_scene_path, sen3_scene_path, s2_mask20m_path = image_paths
+                lowResFilename = sentinel3_processor.unzip_sentinel3(sen3_scene_path, self.temp_directory)
 
                 # 9. Extract and Resample s2_mask at 10 meters
-                s2_mask10m = mask_resampling(s2_mask20m, sen2sr_scene, self.temp_directory)
+                s2_mask10m = mask_resampling(s2_mask20m_path, sen2sr_scene_path, self.temp_directory)
 
                 # 10. Get SR Sentinel-2 bounding box
                 # Reproject Sentinel-3 SLSTR and crop to SR Sentinel-2 bounding box
-                lowResFilename_reprojected, s3_mask = sentinel3_processor.s3_preprocessor(lowResFilename, sen2sr_scene)
+                lowResFilename_reprojected, s3_mask = sentinel3_processor.s3_preprocessor(lowResFilename, sen2sr_scene_path)
 
                 # 11. Thermal Sharpening
                 logger.info('Starting Thermal Sharperning ...')
-                output = self.thermal_sharpening(sen2sr_scene, lowResFilename_reprojected, s2_mask10m, s3_mask)
+                output = self.thermal_sharpening(sen2sr_scene_path, lowResFilename_reprojected, s2_mask10m, s3_mask)
 
                 if output is None:
                     raise RuntimeError("Thermal Sharpening returned None.")
@@ -677,26 +397,46 @@ class PipelineConfig:
                 # 12. Create thumbnails
                 output_ql = create_lst_thumbnail(output_path, self.thumbnail_size)
 
+                # 14. Create COG
+                if self.output_cog:
+                    logger.info("Converting to COG ...")
+                    output_path = convert_to_cog(output_path)
+
                 # 13. Upload final products and thumbnails to ICCS S3.
                 if self.s3_upload:
                     s3_upload.put_output_to_s3(output_ql, self.s3_bucket, self.s3_collection_dir, self.s3_client)
                     s3_upload.put_output_to_s3(output_path, self.s3_bucket, self.s3_collection_dir, self.s3_client)
 
                 # 14. TODO: Create STAC metadata for final products.
-                #file_footprint = stac_indexing.get_bbox_and_footprint(output_path)
+                item_json = stac.create_item_json(self.product_collection_id, sen3_scene, sen2_scene, output_path, output_ql)
             
 
                 # 15. TODO: Post item at collection
+                if self.stac_indexing_enabled:
+                    with httpx.Client(headers=iccs_auth.headers) as client:
+                        response = client.put(
+                            url=(
+                                f"{self.ICCS_STAC_URL}/collections/"
+                                f"{self.product_collection_id}/items/"
+                                f"{output_path.stem}"
+                            ),
+                            json=json.loads(
+                                item_json.read_text(encoding="utf-8")
+                            ),
+                            timeout=60.0,
+                        )
+                        response.raise_for_status()
 
                 logger.info(
                     "Successfully processed Sentinel3 scene: %s",
-                    getattr(sen3_scene, "id", "unknown")
+                    sen3_scene.id,
                 )
 
             except Exception:
+                failures.append(sen3_scene.id)
                 logger.exception(
                     "Error processing Sentinel-3 scene: %s",
-                    getattr(sen3_scene, "id", "unknown")
+                    sen3_scene.id,
                 )
 
             finally:
@@ -715,7 +455,9 @@ class PipelineConfig:
                             "Error during temporary file cleanup."
                         )
 
-        logger.info("Pipeline finished")
+        logger.info("Pipeline finished: %d products, %d failed scenes", len(outputs), len(failures))
+        if failures:
+            logger.warning("Failed Sentinel-3 scene IDs: %s", ", ".join(failures))
 
         return outputs
         

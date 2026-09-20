@@ -17,9 +17,11 @@ output:
   directory: "outputs"
   format: "GeoTIFF"
 
+output_COG: True
+
 storage:
   s3:
-    enabled: True
+    enabled: False
     bucket: 'private-terravision'
     prefix: "sentinel3-lst-ntc-thermal-sharpened-10m"
 

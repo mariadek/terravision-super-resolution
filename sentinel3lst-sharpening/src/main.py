@@ -124,7 +124,7 @@ def main(user_input_path: str, config_path: str) -> None:
 
     pipeline.run(
         aoi=aoi,
-        datetime=acquisition_datetime
+        datetime=acquisition_datetime,
     )
 
     logger.info(
@@ -144,12 +144,13 @@ if __name__ == "__main__":
         required=True,
         help=(
             "Path to a JSON file containing a GeoJSON AOI "
-            "or bounding box and an optional acquisition datetime."
+            "with a bounding box and an optional acquisition datetime."
         ),
     )
 
     parser.add_argument(
         "--config",
+        type=str,
         default="configs/config.yaml",
         help=(
             "Path to the pipeline configuration file "

@@ -129,12 +129,12 @@ class ICCSSentinel2Downloader:
         # download_root / scene_id
         download_path = os.path.join(
             download_root,
-            item.scene_id,
+            item.id,
         )
 
         os.makedirs(download_path, exist_ok=True)
 
-        filename = f"{item.scene_id}.tiff"
+        filename = f"{item.id}.tiff"
 
         output_path = os.path.join(
             download_path,
@@ -153,7 +153,7 @@ class ICCSSentinel2Downloader:
             print(f"Removing incomplete download: {temp_path}")
             temp_path.unlink()
 
-        print(f"Downloading {item.scene_id}")
+        print(f"Downloading {item.id}")
         print(f"Destination: {output_path}")
 
         try:
@@ -167,7 +167,7 @@ class ICCSSentinel2Downloader:
 
                 if response.status_code != 200:
                     raise RuntimeError(
-                        f"Download failed for {item.scene_id}: "
+                        f"Download failed for {item.id}: "
                         f"HTTP {response.status_code}"
                     )
 
