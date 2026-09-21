@@ -1,0 +1,39 @@
+project:
+  name: prisma-pansharpening
+
+input:
+  prisma_directory: "data/PRISMA_RAW_DATA/"
+  directory: "data"
+  enmap_data_root: "data/enmap/ENMAP_HSI_L2A"
+  sen2_data_root: "data/sentinel2/sentinel-2-l2a"
+
+search:
+  min_overlap: 70
+  max_cloud_cover: 20
+  max_time_difference_hours: 1  
+
+sentinel2_download:
+  download_full_sen2_item: False
+
+processing:
+  crop_to_aoi: True
+  pansharpening:
+    max_workers: 2
+  
+output_directory: "outputs"
+output_COG: True
+
+cleanup_data_tmp: False
+request_delay_seconds: 2
+
+thumbnail_size: [343, 343]
+
+storage:
+  s3:
+    enabled: True
+    bucket: "private-terravision"
+    prefix: "prisma-pan-tv"
+
+stac:
+  enabled: True
+  collection_id: "prisma-pan-tv"

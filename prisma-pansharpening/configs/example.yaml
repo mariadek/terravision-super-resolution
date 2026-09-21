@@ -1,0 +1,35 @@
+project:
+  name: prisma-pansharpening
+
+input:
+  prisma_directory: "data/PRISMA_RAW_DATA/"
+  sen2_directory: "data/sentinel2/sentinel-2-l2a"
+
+sentinel2:
+  max_cloud_cover: 10
+  max_time_difference_hours: 4
+  min_overlap: 80
+
+processing:
+  target_crs: null
+  crop_to_aoi: True
+  
+  coregistration:
+    method: "Arosics"
+
+  pansharpening:
+    method: "GSA"
+    max_workers: 2
+
+output:
+  directory: ""
+  format: "COG"
+
+storage:
+  s3:
+    enabled: false
+    bucket: null
+    prefix: "prisma-pan-tv"
+
+stac:
+  collection_id: "prisma-pan-tv"

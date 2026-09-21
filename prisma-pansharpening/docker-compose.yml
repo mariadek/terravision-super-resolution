@@ -1,0 +1,29 @@
+services:
+  prisma_pansharp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    env_file:
+      - .env.example
+      # CDSE_USERNAME=
+      # CDSE_PASSWORD=
+      # ICCS_USERNAME=
+      # ICCS_PASSWORD
+      # AWS_ACCESS_KEY_ID=
+      # AWS_SECRET_ACCESS_KEY
+
+    image: prisma_pansharp:latest
+    container_name: prisma_pansharp
+
+    volumes:
+      - .:/app
+      - ./data:/data
+      - ./tmp:/app/tmp
+
+    environment:
+      PYTHONUNBUFFERED: "1"
+
+    entrypoint: ["python", "src/main.py"]
+
+    command: ["--user_input", "${PRISMA_FILE:-PRISMA_FILE.zip}", "--config", "${CONFIG_FILE:-}"]

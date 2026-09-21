@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+
+.DS_Store
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+.venv/
+venv/
+
+.env
+.env.example
+
+*.egg-info/
+dist/
+build/
+
+# Processing data
+data/
+tmp/

@@ -1,0 +1,8 @@
+dotenv
+pystac-client
+rasterio
+tqdm
+pyyaml 
+h5py 
+boto3
+httpx
