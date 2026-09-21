@@ -9,6 +9,7 @@ import logging
 import hashlib
 import shutil
 
+import json
 import boto3
 
 import numpy as np
@@ -392,7 +393,6 @@ class PipelineConfig:
                         f"Thermal sharpened product is empty: {output_path}"
                     )
 
-                outputs.append(str(output_path))
 
                 # 12. Create thumbnails
                 output_ql = create_lst_thumbnail(output_path, self.thumbnail_size)
@@ -401,6 +401,8 @@ class PipelineConfig:
                 if self.output_cog:
                     logger.info("Converting to COG ...")
                     output_path = convert_to_cog(output_path)
+
+                outputs.append(str(output_path))
 
                 # 13. Upload final products and thumbnails to ICCS S3.
                 if self.s3_upload:
@@ -418,13 +420,14 @@ class PipelineConfig:
                             url=(
                                 f"{self.ICCS_STAC_URL}/collections/"
                                 f"{self.product_collection_id}/items/"
-                                f"{output_path.stem}"
+                                f"{Path(output_path).stem}"
                             ),
                             json=json.loads(
                                 item_json.read_text(encoding="utf-8")
                             ),
                             timeout=60.0,
                         )
+
                         response.raise_for_status()
 
                 logger.info(

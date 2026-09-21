@@ -302,7 +302,7 @@ class PipelineConfig:
                 # 14. Create COG
                 if self.output_cog:
                     logger.info("Converting to COG ...")
-                    output = convert_to_cog(output_path)
+                    output_path = convert_to_cog(output_path)
 
                 outputs.append(str(output_path))
 
@@ -321,7 +321,7 @@ class PipelineConfig:
                             url=(
                                 f"{self.ICCS_STAC_URL}/collections/"
                                 f"{self.product_collection_id}/items/"
-                                f"{output_path.stem}"
+                                f"{Path(output_path).stem}"
                             ),
                             json=json.loads(
                                 item_json.read_text(encoding="utf-8")

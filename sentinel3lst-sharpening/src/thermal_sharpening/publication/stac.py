@@ -21,25 +21,22 @@ logger = logging.getLogger(__name__)
 # -------------------------------------------------------------------
 
 def get_bbox_and_footprint(raster):
+
     with rasterio.open(raster) as r:
-        crs = r.crs.to_epsg()
-        bounds = r.bounds
 
-        bbox = [
-            bounds.left,
-            bounds.bottom,
-            bounds.right,
-            bounds.top
-        ]
+        bounds_4326 = transform_bounds(
+            r.crs,
+            "EPSG:4326",
+            *r.bounds,
+            densify_pts=21
+        )
 
-        footprint = Polygon([
-            [bounds.left, bounds.bottom],
-            [bounds.left, bounds.top],
-            [bounds.right, bounds.top],
-            [bounds.right, bounds.bottom]
-        ])
+        bbox = list(bounds_4326)
 
-        return bbox, mapping(footprint), crs
+        footprint = box(*bounds_4326)
+
+        return bbox, mapping(footprint), r.crs.to_epsg()
+    
     
 def get_acquisition_datetime(filename):
     """

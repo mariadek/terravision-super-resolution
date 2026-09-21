@@ -226,7 +226,7 @@ def create_processed_stac_item(
     # Raster metadata
     # One RasterBand entry per GeoTIFF band
     # -------------------------------------------------------------
-
+    '''
     raster_asset = RasterExtension.ext(asset, add_if_missing=True)
 
     raster_asset.bands = [
@@ -239,6 +239,7 @@ def create_processed_stac_item(
         )
         for b in bands
     ]
+    '''
 
 
     return item
@@ -350,6 +351,7 @@ def create_item_json(product_collection_id, enmap_scene, sentinel2_scene, image_
 
     # Remove existing collection links to avoid duplicates
     enmap_item.remove_links("collection")
+    enmap_item.remove_links("self")
 
     # Add the required collection link
     enmap_item.add_link(
@@ -360,16 +362,16 @@ def create_item_json(product_collection_id, enmap_scene, sentinel2_scene, image_
         )
     )
 
-    enmap_item.remove_links(pystac.RelType.SELF)
-
     # --------------------------------------------------
     # 4. Prepare output JSON path
     # --------------------------------------------------
 
-    item_path = image_dir.parent / f"{enmap_item.id}.json"
-
+    json_path = image_dir.parent / f"{enmap_item.id}.json"
+    public_url = f"{collection_href}/{ql_dir.name}/{enmap_item.id}.json"
+    
     # Assign the local STAC Item location
-    enmap_item.set_self_href(item_path.resolve().as_uri())
+    enmap_item.set_self_href(asset_href)
+
 
     # --------------------------------------------------
     # 5. Validate STAC Item
@@ -394,11 +396,14 @@ def create_item_json(product_collection_id, enmap_scene, sentinel2_scene, image_
     # 6. Save STAC Item JSON
     # --------------------------------------------------
 
-    enmap_item.save_object()
+    enmap_item.save_object(
+        dest_href=str(json_path),
+        include_self_link=True
+    )
 
     logger.info(
         "STAC Item saved to: %s",
-        item_path
+        json_path
     )
 
-    return item_path
+    return json_path

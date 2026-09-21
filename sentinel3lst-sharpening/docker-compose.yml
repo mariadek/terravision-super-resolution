@@ -6,6 +6,12 @@ services:
 
     env_file:
       - .env
+      #CDSE_USERNAME=
+      # CDSE_PASSWORD=
+      # ICCS_USERNAME=
+      # ICCS_PASSWORD
+      # AWS_ACCESS_KEY_ID=
+      # AWS_SECRET_ACCESS_KEY
 
     image: thermalsharperning:latest
     container_name: thermalsharpening
