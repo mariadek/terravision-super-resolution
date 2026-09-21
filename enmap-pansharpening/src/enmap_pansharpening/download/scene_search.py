@@ -1,5 +1,6 @@
 import time
 import logging
+import re
 
 from datetime import timedelta
 from enmap_pansharpening.utils.utils import intersection_percentage
@@ -72,10 +73,10 @@ def search_enmap_images(aoi: dict, enmap_downloader: object, datetime: str | Non
 
 def filter_out_existing_scenes(enmap_scenes, enmap_processed):
     """
-    Return scene objects that have not already been processed.
+    Return EnMAP scenes that have not already been processed.
     """
 
-    pattern = r"^PANSHARP_|_[a-f0-9]+\.TIF$"
+    pattern = r"^PANSHARP_|-SPECTRAL_IMAGE_[a-f0-9]+_COG$"
 
     # Normalize IDs of already processed scenes
     existing_ids = {
@@ -85,9 +86,9 @@ def filter_out_existing_scenes(enmap_scenes, enmap_processed):
 
     # Filter out already processed scenes
     final_scenes_to_process = [
-        item
-        for item in enmap_scenes
-        if re.sub(pattern, "", item.id) not in existing_ids
+        scene
+        for scene in enmap_scenes
+        if scene.id not in existing_ids
     ]
 
     return final_scenes_to_process

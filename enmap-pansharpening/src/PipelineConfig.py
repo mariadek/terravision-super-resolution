@@ -214,6 +214,7 @@ class PipelineConfig:
 
         logger.info(f"{len(enmap_scenes_to_process)} EnMAP scenes will be processed")
 
+
         # 5. Search temporally matching Sentinel-2 scenes.
         sentinel2_scenes = scene_search.search_sentinel2_images(enmap_scenes_to_process, aoi, sentinel2_downloader, self.max_cloud_cover, self.overlap_percentage, self.max_time_diff)
 

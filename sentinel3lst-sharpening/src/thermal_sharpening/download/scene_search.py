@@ -352,14 +352,15 @@ def get_best_by_scene(
     return results
 
 def filter_out_existing_scenes(best_sen3_scenes, sen3_processed):
-    processed_ids = {
-        item.id for item in sen3_processed
-    }
+    processed_ids = {item.id for item in sen3_processed}
 
     return [
         record
         for record in best_sen3_scenes
-        if record["sen3_scene"].id not in processed_ids
+        if not any(
+            processed_id.startswith(f"TS_{record['sen3_scene'].id}_")
+            for processed_id in processed_ids
+        )
     ]
 
 def search_sentinel2_cloud(best_by_scene: list, downloader):
