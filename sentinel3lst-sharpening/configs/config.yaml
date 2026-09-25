@@ -21,10 +21,10 @@ output_COG: True
 
 storage:
   s3:
-    enabled: True
+    enabled: False
     bucket: 'private-terravision'
     prefix: "sentinel3-lst-ntc-thermal-sharpened-10m"
 
 stac:
-  enabled: True
+  enabled: False
   collection_id: "sentinel3-lst-ntc-thermal-sharpened-10m"

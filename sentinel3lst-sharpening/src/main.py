@@ -86,10 +86,10 @@ def load_user_input(
 
 
 def main(user_input_path: str, config_path: str) -> None:
-    """Run the TERRAVISION EnMAP pansharpening pipeline."""
+    """Run the TERRAVISION thermal sharpening pipeline."""
 
     logger.info(
-        "Starting TERRAVISION EnMAP pansharpening pipeline"
+        "Starting TERRAVISION thermal sharpening pipeline"
     )
 
     logger.info(

@@ -95,8 +95,8 @@ class ICCSSentinel2Downloader:
     """
 
     def __init__(self):
-        self.username = os.environ["ICCS_STAC_USRNAME"]
-        self.password = os.environ["ICCS_STAC_PASSWRD"]
+        self.username = os.environ["ICCS_USERNAME"]
+        self.password = os.environ["ICCS_PASSWORD"]
         self.auth =  KeycloakAuth(self.username, self.password)
 
 
@@ -124,6 +124,9 @@ class ICCSSentinel2Downloader:
 
         needs_auth = ICCS_STAC_URL in url
         headers = self.auth.headers if needs_auth else {}
+
+        print("Authentication enabled:", needs_auth)
+        print("Auth header names:", list(headers.keys()))
 
         # Create:
         # download_root / scene_id

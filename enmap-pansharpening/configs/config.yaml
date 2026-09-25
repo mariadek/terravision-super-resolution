@@ -32,10 +32,10 @@ thumbnail_size: [343, 343]
 
 storage:
   s3:
-    enabled: True
+    enabled: False
     bucket: "private-terravision"
     prefix: "enmap-l2a-pansharpened-gsa-10m"
 
 stac:
-  enabled: True
+  enabled: False
   collection_id: "enmap-l2a-pansharpened-gsa-10m"
